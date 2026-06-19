@@ -1,15 +1,20 @@
 [caissa]
 farga_url = "http://localhost:7500"
-project = "my-project"
-pii_patterns = ["email", "phone", "ssn"]
-# Per-session workspace volumes are created here: <workspaces_dir>/<session_id>/
-# and mounted at /workspace inside the container.
+project = "occitan"
+pii_patterns = ["email", "phone"]
 workspaces_dir = "workspaces"
-# Path to the Fondament repo. Used by `caissa build` to locate agent definitions.
 fondament_path = "../Fondament"
-# Container registry prefix for `caissa push`.
-# If set, images are tagged <registry>/caissa-sandbox:<generation> before pushing.
-# registry = "ghcr.io/occitan"
+generation = "guilhem"
+
+# MCP endpoints injected into agent containers at spawn time.
+# Defaults point to cluster-internal DNS (works in kind/EKS/AKS without changes).
+# For local dev with kind + port-forward, override to localhost:
+#   farga_mcp_url = "http://localhost:7500/mcp"
+#   dispatcher_mcp_url = "http://localhost:9090/mcp"
+farga_mcp_url = "http://farga.occitan-system.svc.cluster.local:7500/mcp"
+dispatcher_mcp_url = "http://dispatcher.agents.svc.cluster.local:9090/mcp"
+
+# registry = "ghcr.io/bedardpl"
 
 [sandbox]
 image = "caissa-sandbox:latest"

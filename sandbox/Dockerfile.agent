@@ -9,7 +9,11 @@
 # Build: caissa build <generation>
 # Run:   caissa spawn <generation> [--project <proj>] [--session <id>]
 
-FROM caissa-sandbox:latest
+FROM node:20-slim
+
+# python3 needed by entrypoint.sh task mode (posts result to Farga REST)
+RUN apt-get update && apt-get install -y --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code
 RUN npm install -g @anthropic-ai/claude-code
