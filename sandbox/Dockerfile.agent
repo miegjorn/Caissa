@@ -1,0 +1,30 @@
+# caissa-sandbox:<generation>
+# Agent image built by `caissa build <generation>`.
+# Layers Claude Code + a baked-in persona on top of caissa-sandbox:latest.
+#
+# The persona (claude.md) is generated from the Fondament definition at build time
+# and placed at ~/.claude/CLAUDE.md — the identity layer that Claude Code reads first.
+# Project context from Farga is injected into /workspace/CLAUDE.md at spawn time.
+#
+# Build: caissa build <generation>
+# Run:   caissa spawn <generation> [--project <proj>] [--session <id>]
+
+FROM caissa-sandbox:latest
+
+# Install Claude Code
+RUN npm install -g @anthropic-ai/claude-code
+
+# Bake the agent persona into the home directory.
+# This is the identity layer — who the agent is, not what it knows right now.
+RUN mkdir -p /root/.claude
+COPY claude.md /root/.claude/CLAUDE.md
+
+# Entrypoint script: writes MCP config from env vars, then runs claude.
+# MCP servers (farga, dispatcher) are wired at runtime via FARGA_MCP_URL
+# and DISPATCHER_MCP_URL — defaults point to cluster-internal DNS.
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+WORKDIR /workspace
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

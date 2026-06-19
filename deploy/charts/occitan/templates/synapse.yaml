@@ -1,0 +1,162 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: synapse-media
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.synapse.mediaStorage }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: synapse-config
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+data:
+  homeserver.yaml: |
+    server_name: {{ .Values.synapse.serverName | quote }}
+    pid_file: /data/homeserver.pid
+    public_baseurl: {{ .Values.synapse.publicBaseurl | quote }}
+
+    listeners:
+      - port: {{ .Values.synapse.clientPort }}
+        tls: false
+        type: http
+        x_forwarded: true
+        resources:
+          - names: [client, federation]
+            compress: false
+      - port: {{ .Values.synapse.federationPort }}
+        tls: false
+        type: http
+        resources:
+          - names: [client, federation]
+            compress: false
+
+    database:
+      name: psycopg2
+      args:
+        user: {{ .Values.postgresql.auth.username }}
+        password: {{ .Values.postgresql.auth.password }}
+        database: {{ .Values.postgresql.auth.database }}
+        host: {{ include "occitan.postgresHost" . }}
+        port: 5432
+        cp_min: 5
+        cp_max: 10
+
+    log_config: "/data/log.config"
+    media_store_path: "/data/media_store"
+    signing_key_path: "/data/{{ .Values.synapse.serverName }}.signing.key"
+
+    enable_registration: {{ .Values.synapse.enableRegistration }}
+    enable_registration_without_verification: {{ .Values.synapse.enableRegistration }}
+
+    app_service_config_files:
+      - /data/charradissa-registration.yaml
+
+    federation_domain_whitelist: []
+    allow_public_rooms_without_auth: true
+    allow_public_rooms_over_federation: false
+    report_stats: {{ .Values.synapse.reportStats }}
+    trusted_key_servers: []
+    suppress_key_server_warning: true
+
+  log.config: |
+    version: 1
+    formatters:
+      precise:
+        format: '%(asctime)s - %(name)s - %(lineno)d - %(levelname)s - %(request)s - %(message)s'
+    handlers:
+      console:
+        class: logging.StreamHandler
+        formatter: precise
+    loggers:
+      synapse.storage.SQL:
+        level: WARNING
+    root:
+      level: INFO
+      handlers: [console]
+    disable_existing_loggers: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: synapse
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+    {{- include "occitan.selectorLabels" (dict "component" "synapse" "context" .) | nindent 4 }}
+spec:
+  replicas: {{ .Values.synapse.replicas }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "occitan.selectorLabels" (dict "component" "synapse" "context" .) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "occitan.selectorLabels" (dict "component" "synapse" "context" .) | nindent 8 }}
+    spec:
+      containers:
+        - name: synapse
+          image: {{ .Values.synapse.image }}
+          env:
+            - name: SYNAPSE_CONFIG_PATH
+              value: /config/homeserver.yaml
+          ports:
+            - containerPort: {{ .Values.synapse.clientPort }}
+              name: client
+            - containerPort: {{ .Values.synapse.federationPort }}
+              name: federation
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.synapse.clientPort }}
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+      volumes:
+        - name: config
+          configMap:
+            name: synapse-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: synapse-media
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: synapse
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+spec:
+  type: LoadBalancer
+  selector:
+    {{- include "occitan.selectorLabels" (dict "component" "synapse" "context" .) | nindent 4 }}
+  ports:
+    - port: {{ .Values.synapse.clientPort }}
+      targetPort: {{ .Values.synapse.clientPort }}
+      name: client
+    - port: {{ .Values.synapse.federationPort }}
+      targetPort: {{ .Values.synapse.federationPort }}
+      name: federation

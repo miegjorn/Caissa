@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gardian
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+    {{- include "occitan.selectorLabels" (dict "component" "gardian" "context" .) | nindent 4 }}
+spec:
+  replicas: {{ .Values.gardian.replicas }}
+  selector:
+    matchLabels:
+      {{- include "occitan.selectorLabels" (dict "component" "gardian" "context" .) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "occitan.selectorLabels" (dict "component" "gardian" "context" .) | nindent 8 }}
+    spec:
+      containers:
+        - name: gardian
+          image: {{ .Values.gardian.image }}
+          command: ["gardian-server"]
+          ports:
+            - containerPort: {{ .Values.gardian.port }}
+          env:
+            {{- range $k, $v := .Values.gardian.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.gardian.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gardian
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "occitan.selectorLabels" (dict "component" "gardian" "context" .) | nindent 4 }}
+  ports:
+    - port: {{ .Values.gardian.port }}
+      targetPort: {{ .Values.gardian.port }}
+      name: http

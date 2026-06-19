@@ -1,0 +1,86 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: element-config
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+data:
+  config.json: |
+    {
+      "default_server_config": {
+        "m.homeserver": {
+          "base_url": {{ .Values.synapse.publicBaseurl | quote }},
+          "server_name": {{ .Values.synapse.serverName | quote }}
+        }
+      },
+      "disable_custom_urls": false,
+      "disable_guests": false,
+      "disable_3pid_login": true,
+      "brand": {{ .Values.element.brand | quote }},
+      "integrations_ui_url": null,
+      "integrations_rest_url": null,
+      "integrations_widgets_urls": [],
+      "bug_report_endpoint_url": null,
+      "show_labs_settings": true
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: element
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+    {{- include "occitan.selectorLabels" (dict "component" "element" "context" .) | nindent 4 }}
+spec:
+  replicas: {{ .Values.element.replicas }}
+  selector:
+    matchLabels:
+      {{- include "occitan.selectorLabels" (dict "component" "element" "context" .) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "occitan.selectorLabels" (dict "component" "element" "context" .) | nindent 8 }}
+    spec:
+      containers:
+        - name: element
+          image: {{ .Values.element.image }}
+          ports:
+            - containerPort: {{ .Values.element.port }}
+          volumeMounts:
+            - name: config
+              mountPath: /app/config.json
+              subPath: config.json
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /
+              port: {{ .Values.element.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+      volumes:
+        - name: config
+          configMap:
+            name: element-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: element
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "occitan.selectorLabels" (dict "component" "element" "context" .) | nindent 4 }}
+  ports:
+    - port: 80
+      targetPort: {{ .Values.element.port }}
+      name: http

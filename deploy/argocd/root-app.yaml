@@ -1,0 +1,35 @@
+# Root "app of apps" — bootstrap this once, ArgoCD manages everything else.
+#
+# Apply with:
+#   kubectl apply -f deploy/argocd/root-app.yaml
+#
+# After this, every file under deploy/argocd/apps/ is an ArgoCD Application
+# that ArgoCD will discover and sync automatically.
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: occitan-root
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: occitan
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: occitan
+
+  source:
+    repoURL: https://github.com/bedardpl/Caissa.git
+    targetRevision: HEAD
+    path: deploy/argocd/apps
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

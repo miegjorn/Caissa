@@ -1,0 +1,38 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: occitan
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: occitan
+spec:
+  description: Occitan stack — all services and agents
+
+  sourceRepos:
+    - "https://github.com/bedardpl/Caissa.git"
+    - "https://github.com/bedardpl/Fondament.git"
+    - "https://charts.bitnami.com/bitnami"
+    - "https://kubernetes.github.io/ingress-nginx"
+
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: occitan-system
+    - server: https://kubernetes.default.svc
+      namespace: agents
+    - server: https://kubernetes.default.svc
+      namespace: argocd
+
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+    - group: "rbac.authorization.k8s.io"
+      kind: ClusterRole
+    - group: "rbac.authorization.k8s.io"
+      kind: ClusterRoleBinding
+
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
+
+  orphanedResources:
+    warn: true

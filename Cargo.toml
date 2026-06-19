@@ -15,3 +15,6 @@ clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 toml = "0.8"
+serde_yaml = "0.9"
+axum = { version = "0.7", features = ["json"] }
+tokio-util = { version = "0.7", features = ["io"] }

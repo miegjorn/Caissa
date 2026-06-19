@@ -1,0 +1,72 @@
+# Guilhem agent Deployment.
+# The pod runs a lightweight event listener (always on, ~0 cost).
+# Claude Code is only invoked when an event warrants a chronicle run.
+# See task #7 for the event listener implementation.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: guilhem
+  namespace: agents
+  labels:
+    app.kubernetes.io/name: guilhem
+    app.kubernetes.io/part-of: occitan
+    occitan/generation: guilhem
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: guilhem
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: guilhem
+        occitan/generation: guilhem
+    spec:
+      containers:
+        - name: guilhem
+          image: {{ .Values.image }}
+          # Webhook listener — accepts POST /trigger/chronicle from Argo Workflows.
+          # Runs claude --print non-interactively when triggered; idle cost is zero.
+          command: ["caissa", "listen", "--port", "8080"]
+          env:
+            - name: FARGA_URL
+              value: {{ .Values.farga.url | quote }}
+            - name: FARGA_PROJECT
+              value: {{ .Values.farga.project | quote }}
+            - name: MATRIX_HOMESERVER
+              value: {{ .Values.matrix.homeserver | quote }}
+            - name: MATRIX_SERVER_NAME
+              value: {{ .Values.matrix.serverName | quote }}
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: anthropic
+                  key: api-key
+                  optional: false
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: guilhem
+  namespace: agents
+  labels:
+    app.kubernetes.io/name: guilhem
+    app.kubernetes.io/part-of: occitan
+spec:
+  selector:
+    app.kubernetes.io/name: guilhem
+  ports:
+    # Webhook endpoint — receives git push events, Matrix webhooks, cron triggers.
+    # Port wired in task #7 when the event listener is implemented.
+    - port: 8080
+      targetPort: 8080
+      name: webhook

@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: amassada
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+    {{- include "occitan.selectorLabels" (dict "component" "amassada" "context" .) | nindent 4 }}
+spec:
+  replicas: {{ .Values.amassada.replicas }}
+  selector:
+    matchLabels:
+      {{- include "occitan.selectorLabels" (dict "component" "amassada" "context" .) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "occitan.selectorLabels" (dict "component" "amassada" "context" .) | nindent 8 }}
+    spec:
+      containers:
+        - name: amassada
+          image: {{ .Values.amassada.image }}
+          command: ["amassada-server"]
+          ports:
+            - containerPort: {{ .Values.amassada.port }}
+          env:
+            {{- range $k, $v := .Values.amassada.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: anthropic
+                  key: api-key
+            - name: FARGA_URL
+              value: "http://farga:{{ .Values.farga.port }}"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.amassada.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: amassada
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "occitan.selectorLabels" (dict "component" "amassada" "context" .) | nindent 4 }}
+  ports:
+    - port: {{ .Values.amassada.port }}
+      targetPort: {{ .Values.amassada.port }}
+      name: http

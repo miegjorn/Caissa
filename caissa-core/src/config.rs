@@ -9,6 +9,40 @@ pub struct CaissaConfig {
     pub pii_patterns: Vec<String>,
     /// Base directory for per-session workspace volumes. Default: "./workspaces"
     pub workspaces_dir: String,
+    /// Path to the Fondament repo root. Used by `caissa build` to resolve agent definitions.
+    #[serde(default = "default_fondament_path")]
+    pub fondament_path: String,
+    /// Container registry prefix for `caissa push` (e.g. "ghcr.io/occitan").
+    /// When absent, the local tag is pushed as-is.
+    #[serde(default)]
+    pub registry: Option<String>,
+    /// Current generation name — the image tag used when spawning domain/facet agents.
+    /// Defaults to "guilhem".
+    #[serde(default = "default_generation")]
+    pub generation: String,
+    /// Farga MCP endpoint injected into the agent container at spawn time.
+    /// Defaults to the cluster-internal DNS name (works in kind and EKS/AKS).
+    #[serde(default = "default_farga_mcp_url")]
+    pub farga_mcp_url: String,
+    /// Dispatcher MCP endpoint injected into the agent container at spawn time.
+    #[serde(default = "default_dispatcher_mcp_url")]
+    pub dispatcher_mcp_url: String,
+}
+
+fn default_fondament_path() -> String {
+    "../Fondament".into()
+}
+
+fn default_generation() -> String {
+    "guilhem".into()
+}
+
+fn default_farga_mcp_url() -> String {
+    "http://farga.occitan-system.svc.cluster.local:7500/mcp".into()
+}
+
+fn default_dispatcher_mcp_url() -> String {
+    "http://dispatcher.agents.svc.cluster.local:9090/mcp".into()
 }
 
 impl Default for CaissaConfig {
@@ -18,6 +52,11 @@ impl Default for CaissaConfig {
             project: "default".into(),
             pii_patterns: vec!["email".into(), "phone".into()],
             workspaces_dir: "workspaces".into(),
+            fondament_path: default_fondament_path(),
+            registry: None,
+            generation: default_generation(),
+            farga_mcp_url: default_farga_mcp_url(),
+            dispatcher_mcp_url: default_dispatcher_mcp_url(),
         }
     }
 }

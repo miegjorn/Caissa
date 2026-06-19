@@ -1,0 +1,42 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: occitan
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: occitan
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: occitan
+
+  source:
+    repoURL: https://github.com/bedardpl/Caissa.git
+    targetRevision: HEAD
+    path: deploy/charts/occitan
+    helm:
+      # Resolve bitnami/postgresql dependency at sync time.
+      # Requires the bitnami repo registered in ArgoCD (see docs/install.md).
+      releaseName: occitan
+      valueFiles:
+        - values.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: occitan-system
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+
+  ignoreDifferences:
+    # Synapse signing key is generated on first run — ignore drift.
+    - group: ""
+      kind: Secret
+      name: synapse-signing-key
+      jsonPointers:
+        - /data

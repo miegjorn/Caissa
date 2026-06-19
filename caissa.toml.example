@@ -5,6 +5,11 @@ pii_patterns = ["email", "phone", "ssn"]
 # Per-session workspace volumes are created here: <workspaces_dir>/<session_id>/
 # and mounted at /workspace inside the container.
 workspaces_dir = "workspaces"
+# Path to the Fondament repo. Used by `caissa build` to locate agent definitions.
+fondament_path = "../Fondament"
+# Container registry prefix for `caissa push`.
+# If set, images are tagged <registry>/caissa-sandbox:<generation> before pushing.
+# registry = "ghcr.io/occitan"
 
 [sandbox]
 image = "caissa-sandbox:latest"

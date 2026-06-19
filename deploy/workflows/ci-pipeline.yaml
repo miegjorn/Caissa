@@ -1,0 +1,99 @@
+# CI pipeline — triggered by git push events via Argo Events (or manual).
+# Rebuilds the relevant service image when its repo changes.
+#
+# Usage (manual trigger):
+#   argo submit deploy/workflows/ci-pipeline.yaml \
+#     -n argo \
+#     -p service=farga \
+#     -p registry=ghcr.io/bedardpl
+
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: ci-build-
+  namespace: argo
+spec:
+  entrypoint: build-service
+  arguments:
+    parameters:
+      - name: service
+        value: farga         # gardian | farga | amassada | charradissa
+      - name: registry
+        value: ghcr.io/bedardpl
+      - name: revision
+        value: main
+
+  templates:
+    - name: build-service
+      steps:
+        - - name: build
+            templateRef:
+              name: build-rust-service
+              template: build-and-push
+            arguments:
+              parameters:
+                - name: repo
+                  value: "https://github.com/bedardpl/{{workflow.parameters.service}}.git"
+                - name: service
+                  value: "{{workflow.parameters.service}}"
+                - name: registry
+                  value: "{{workflow.parameters.registry}}"
+                - name: git-revision
+                  value: "{{workflow.parameters.revision}}"
+
+        - - name: sync-argocd
+            template: argocd-sync
+
+    - name: argocd-sync
+      container:
+        image: argoproj/argocd:latest
+        command: [argocd, app, sync, occitan, "--server", "argocd-server.argocd.svc.cluster.local", "--auth-token", "$(ARGOCD_TOKEN)", "--insecure"]
+        env:
+          - name: ARGOCD_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: argocd-ci-token
+                key: token
+---
+# Workflow to rebuild the Guilhem agent image when Fondament changes.
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: build-agent-
+  namespace: argo
+spec:
+  entrypoint: build-agent
+  arguments:
+    parameters:
+      - name: generation
+        value: guilhem
+      - name: registry
+        value: ghcr.io/bedardpl
+
+  templates:
+    - name: build-agent
+      steps:
+        - - name: build
+            templateRef:
+              name: build-agent-image
+              template: build-and-push
+            arguments:
+              parameters:
+                - name: generation
+                  value: "{{workflow.parameters.generation}}"
+                - name: registry
+                  value: "{{workflow.parameters.registry}}"
+
+        - - name: sync-guilhem
+            template: sync-agent
+
+    - name: sync-agent
+      container:
+        image: argoproj/argocd:latest
+        command: [argocd, app, sync, guilhem, "--server", "argocd-server.argocd.svc.cluster.local", "--auth-token", "$(ARGOCD_TOKEN)", "--insecure"]
+        env:
+          - name: ARGOCD_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: argocd-ci-token
+                key: token

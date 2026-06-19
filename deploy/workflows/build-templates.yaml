@@ -1,0 +1,202 @@
+# Reusable WorkflowTemplates for building and pushing Occitan images.
+# Used by both manual triggers and the CI pipeline.
+#
+# Requires:
+#   - A registry secret: kubectl create secret generic registry-creds \
+#       --from-file=config.json=~/.docker/config.json -n argo
+#   - Kaniko ServiceAccount with cluster permissions (see kaniko-rbac.yaml)
+
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: build-rust-service
+  namespace: argo
+spec:
+  templates:
+    - name: build-and-push
+      inputs:
+        parameters:
+          - name: repo            # e.g. "https://github.com/bedardpl/Farga.git"
+          - name: service         # e.g. "farga"
+          - name: registry        # e.g. "ghcr.io/bedardpl"
+          - name: git-revision
+            default: "main"
+      volumes:
+        - name: registry-creds
+          secret:
+            secretName: registry-creds
+            items:
+              - key: config.json
+                path: config.json
+        - name: workspace
+          emptyDir: {}
+      steps:
+        - - name: clone
+            template: git-clone
+            arguments:
+              parameters:
+                - name: repo
+                  value: "{{inputs.parameters.repo}}"
+                - name: revision
+                  value: "{{inputs.parameters.git-revision}}"
+
+        - - name: kaniko-build
+            template: kaniko
+            arguments:
+              parameters:
+                - name: context
+                  value: "/workspace"
+                - name: destination
+                  value: "{{inputs.parameters.registry}}/{{inputs.parameters.service}}:latest"
+
+    - name: git-clone
+      inputs:
+        parameters:
+          - name: repo
+          - name: revision
+      container:
+        image: alpine/git:latest
+        command: [git, clone, "--depth=1", "--branch", "{{inputs.parameters.revision}}", "{{inputs.parameters.repo}}", /workspace]
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+
+    - name: kaniko
+      inputs:
+        parameters:
+          - name: context
+          - name: destination
+      container:
+        image: gcr.io/kaniko-project/executor:latest
+        args:
+          - "--context={{inputs.parameters.context}}"
+          - "--destination={{inputs.parameters.destination}}"
+          - "--cache=true"
+        volumeMounts:
+          - name: registry-creds
+            mountPath: /kaniko/.docker
+          - name: workspace
+            mountPath: /workspace
+---
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: build-agent-image
+  namespace: argo
+spec:
+  templates:
+    - name: build-and-push
+      inputs:
+        parameters:
+          - name: generation      # e.g. "guilhem"
+          - name: registry        # e.g. "ghcr.io/bedardpl"
+          - name: caissa-revision
+            default: "main"
+          - name: fondament-revision
+            default: "main"
+      volumes:
+        - name: registry-creds
+          secret:
+            secretName: registry-creds
+            items:
+              - key: config.json
+                path: config.json
+        - name: workspace
+          emptyDir: {}
+      steps:
+        - - name: clone-caissa
+            template: git-clone-to
+            arguments:
+              parameters:
+                - name: repo
+                  value: "https://github.com/bedardpl/Caissa.git"
+                - name: revision
+                  value: "{{inputs.parameters.caissa-revision}}"
+                - name: dest
+                  value: "/workspace/Caissa"
+          - name: clone-fondament
+            template: git-clone-to
+            arguments:
+              parameters:
+                - name: repo
+                  value: "https://github.com/bedardpl/Fondament.git"
+                - name: revision
+                  value: "{{inputs.parameters.fondament-revision}}"
+                - name: dest
+                  value: "/workspace/Fondament"
+
+        - - name: assemble-context
+            template: assemble
+            arguments:
+              parameters:
+                - name: generation
+                  value: "{{inputs.parameters.generation}}"
+
+        - - name: kaniko-build
+            template: kaniko-agent
+            arguments:
+              parameters:
+                - name: generation
+                  value: "{{inputs.parameters.generation}}"
+                - name: destination
+                  value: "{{inputs.parameters.registry}}/caissa-sandbox:{{inputs.parameters.generation}}"
+
+    - name: git-clone-to
+      inputs:
+        parameters:
+          - name: repo
+          - name: revision
+          - name: dest
+      container:
+        image: alpine/git:latest
+        command: [git, clone, "--depth=1", "--branch", "{{inputs.parameters.revision}}", "{{inputs.parameters.repo}}", "{{inputs.parameters.dest}}"]
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+
+    - name: assemble
+      inputs:
+        parameters:
+          - name: generation
+      container:
+        image: python:3.12-slim
+        command: [python3, -c]
+        args:
+          - |
+            import yaml, os, shutil
+
+            gen = "{{inputs.parameters.generation}}"
+            fondament_def = f"/workspace/Fondament/definitions/fondament/{gen}.yaml"
+            build_ctx = f"/workspace/build-context"
+            os.makedirs(build_ctx, exist_ok=True)
+
+            with open(fondament_def) as f:
+                data = yaml.safe_load(f)
+            context = data.get("context", "").rstrip()
+
+            with open(f"{build_ctx}/claude.md", "w") as f:
+                f.write(context)
+
+            shutil.copy("/workspace/Caissa/sandbox/Dockerfile.agent", f"{build_ctx}/Dockerfile")
+            print(f"Build context assembled for generation: {gen}")
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+
+    - name: kaniko-agent
+      inputs:
+        parameters:
+          - name: generation
+          - name: destination
+      container:
+        image: gcr.io/kaniko-project/executor:latest
+        args:
+          - "--context=/workspace/build-context"
+          - "--destination={{inputs.parameters.destination}}"
+          - "--cache=true"
+          - "--build-arg=GENERATION={{inputs.parameters.generation}}"
+        volumeMounts:
+          - name: registry-creds
+            mountPath: /kaniko/.docker
+          - name: workspace
+            mountPath: /workspace

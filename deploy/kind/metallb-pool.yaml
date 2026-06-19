@@ -1,0 +1,27 @@
+# MetalLB L2 IP address pool for the kind cluster.
+# kind uses docker's bridge network (172.18.0.0/16 by default).
+# This pool carves out .200-.250 for LoadBalancer services.
+#
+# If your docker bridge is on a different subnet, adjust addresses accordingly:
+#   docker network inspect kind | grep Subnet
+#
+# Applied after MetalLB is installed:
+#   kubectl apply -f deploy/kind/metallb-pool.yaml
+
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: occitan-pool
+  namespace: metallb-system
+spec:
+  addresses:
+    - 172.18.0.200-172.18.0.250
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: occitan-l2
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - occitan-pool

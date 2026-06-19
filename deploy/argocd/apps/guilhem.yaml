@@ -1,0 +1,32 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: guilhem
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: occitan
+    occitan/generation: guilhem
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: occitan
+
+  source:
+    repoURL: https://github.com/bedardpl/Caissa.git
+    targetRevision: HEAD
+    path: deploy/charts/guilhem
+    helm:
+      releaseName: guilhem
+      valueFiles:
+        - values.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: agents
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

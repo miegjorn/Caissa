@@ -1,0 +1,62 @@
+# CronWorkflow — Guilhem chronicle run.
+# Triggers the Guilhem listen daemon's /trigger/chronicle endpoint on a schedule.
+# The daemon runs `claude --print` non-interactively and writes a Signal to Farga.
+#
+# Schedule: every 6 hours by default (see guilhem/values.yaml chronicleSchedule).
+# Adjust by editing the schedule field below or overriding in values.yaml.
+
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: guilhem-chronicle
+  namespace: argo
+  labels:
+    app.kubernetes.io/part-of: occitan
+    occitan/generation: guilhem
+spec:
+  schedule: "0 */6 * * *"
+  timezone: "America/Toronto"
+  concurrencyPolicy: Forbid       # never run two chronicle sessions simultaneously
+  startingDeadlineSeconds: 300    # skip if cluster was down at scheduled time
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 3
+
+  workflowSpec:
+    entrypoint: trigger-chronicle
+    templates:
+      - name: trigger-chronicle
+        steps:
+          - - name: notify-guilhem
+              template: http-trigger
+
+      - name: http-trigger
+        http:
+          url: "http://guilhem.agents.svc.cluster.local:8080/trigger/chronicle"
+          method: POST
+          headers:
+            - name: Content-Type
+              value: application/json
+          body: '{"reason":"scheduled chronicle run — every 6 hours"}'
+          successCondition: "response.statusCode == 202"
+          timeoutSeconds: 30
+---
+# On-demand chronicle trigger — run once immediately.
+# Usage: kubectl create -f chronicle-cron.yaml (the Workflow object below)
+# or:    argo submit deploy/workflows/chronicle-now.yaml -n argo
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: chronicle-now
+  namespace: argo
+spec:
+  templates:
+    - name: trigger
+      http:
+        url: "http://guilhem.agents.svc.cluster.local:8080/trigger/chronicle"
+        method: POST
+        headers:
+          - name: Content-Type
+            value: application/json
+        body: '{"reason":"manual chronicle trigger"}'
+        successCondition: "response.statusCode == 202"
+        timeoutSeconds: 30

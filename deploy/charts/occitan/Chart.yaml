@@ -1,0 +1,13 @@
+apiVersion: v2
+name: occitan
+description: Occitan stack — Gardian, Farga, Amassada, Charradissa, Synapse, Element
+type: application
+version: 0.1.0
+appVersion: "phase-II"
+
+dependencies:
+  - name: postgresql
+    version: "16.x.x"
+    repository: https://charts.bitnami.com/bitnami
+    alias: postgresql
+    condition: postgresql.enabled

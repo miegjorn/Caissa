@@ -1,0 +1,105 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: charradissa-config
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+data:
+  charradissa.toml: |
+    [org]
+    name = {{ .Values.charradissa.config.org.name | quote }}
+    homeserver = {{ .Values.charradissa.config.org.homeserver | quote }}
+
+    [backend]
+    type = {{ .Values.charradissa.config.backend.type | quote }}
+
+    [concierge]
+    archival_interval_hours = {{ .Values.charradissa.config.concierge.archival_interval_hours }}
+    convergence_interval_hours = {{ .Values.charradissa.config.concierge.convergence_interval_hours }}
+    daily_token_budget = {{ .Values.charradissa.config.concierge.daily_token_budget }}
+
+    [approval]
+    timeout_minutes = {{ .Values.charradissa.config.approval.timeout_minutes }}
+
+    [tasks]
+    type = {{ .Values.charradissa.config.tasks.type | quote }}
+
+    [projects]
+    autodiscover = {{ .Values.charradissa.config.projects.autodiscover }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: charradissa
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+    {{- include "occitan.selectorLabels" (dict "component" "charradissa" "context" .) | nindent 4 }}
+spec:
+  replicas: {{ .Values.charradissa.replicas }}
+  selector:
+    matchLabels:
+      {{- include "occitan.selectorLabels" (dict "component" "charradissa" "context" .) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "occitan.selectorLabels" (dict "component" "charradissa" "context" .) | nindent 8 }}
+    spec:
+      containers:
+        - name: charradissa
+          image: {{ .Values.charradissa.image }}
+          command: ["charradissa-daemon"]
+          ports:
+            - containerPort: {{ .Values.charradissa.port }}
+          env:
+            {{- range $k, $v := .Values.charradissa.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: anthropic
+                  key: api-key
+            - name: MATRIX_AS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: charradissa
+                  key: as-token
+            - name: FARGA_URL
+              value: "http://farga:{{ .Values.farga.port }}"
+          volumeMounts:
+            - name: config
+              mountPath: /config
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.charradissa.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        - name: config
+          configMap:
+            name: charradissa-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: charradissa
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "occitan.selectorLabels" (dict "component" "charradissa" "context" .) | nindent 4 }}
+  ports:
+    - port: {{ .Values.charradissa.port }}
+      targetPort: {{ .Values.charradissa.port }}
+      name: appservice

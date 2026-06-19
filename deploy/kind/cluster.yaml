@@ -1,0 +1,35 @@
+# kind cluster definition for the Occitan stack.
+# Usage: kind create cluster --config deploy/kind/cluster.yaml
+#
+# Port mappings expose Matrix (8008/8448) and HTTP/HTTPS (80/443) directly
+# from the kind node to the host. MetalLB handles LoadBalancer IPs for
+# service-to-service routing within the cluster.
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: occitan
+
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      # HTTP / HTTPS — ingress-nginx
+      - containerPort: 80
+        hostPort: 80
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 443
+        protocol: TCP
+      # Matrix client-server API
+      - containerPort: 8008
+        hostPort: 8008
+        protocol: TCP
+      # Matrix federation + appservice webhook (Charradissa)
+      - containerPort: 8448
+        hostPort: 8448
+        protocol: TCP

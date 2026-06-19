@@ -1,0 +1,43 @@
+# CoreDNS ConfigMap patch — adds occitane.guilhem zone resolution within the cluster.
+#
+# Within the cluster, occitane.guilhem resolves to the Synapse service via CNAME rewrite.
+# For resolution from the host machine, add an /etc/hosts entry (see docs/install.md).
+#
+# Applied with:
+#   kubectl patch configmap coredns -n kube-system --patch "$(cat deploy/kind/coredns-patch.yaml)"
+
+data:
+  Corefile: |
+    .:53 {
+        errors
+        health {
+           lameduck 5s
+        }
+        ready
+        kubernetes cluster.local in-addr.arpa ip6.arpa {
+           pods insecure
+           fallthrough in-addr.arpa ip6.arpa
+           ttl 30
+        }
+        prometheus :9153
+        forward . /etc/resolv.conf {
+           max_concurrent 1000
+        }
+        cache 30
+        loop
+        reload
+        loadbalance
+    }
+
+    occitane.guilhem:53 {
+        errors
+        # Rewrite occitane.guilhem → synapse service inside the cluster.
+        # This lets Charradissa and other in-cluster services reach Synapse
+        # using the canonical Matrix server name.
+        rewrite name occitane.guilhem synapse.occitan-system.svc.cluster.local
+        kubernetes cluster.local {
+           pods insecure
+        }
+        forward . /etc/resolv.conf
+        cache 30
+    }

@@ -1,0 +1,93 @@
+# Occitan stack — Helm values
+# Override per environment: helm upgrade occitan ./charts/occitan -f values.prod.yaml
+
+# ─── Gardian ─────────────────────────────────────────────────────────────────
+gardian:
+  image: ghcr.io/occitan/gardian:latest
+  replicas: 1
+  port: 7600
+  env:
+    GARDIAN_MODE: server
+    GARDIAN_PORT: "7600"
+
+# ─── Farga ───────────────────────────────────────────────────────────────────
+farga:
+  image: ghcr.io/occitan/farga:latest
+  replicas: 1
+  port: 7500
+  storage: 5Gi
+  env:
+    FARGA_PORT: "7500"
+    FARGA_DB: /data/farga.db
+    FARGA_DOCS: /data/docs
+
+# ─── Amassada ────────────────────────────────────────────────────────────────
+# Canvases are baked into the image at /canvases/stdlib.
+amassada:
+  image: ghcr.io/occitan/amassada:latest
+  replicas: 1
+  port: 7700
+  env:
+    AMASSADA_PORT: "7700"
+    AMASSADA_CANVAS_DIR: /canvases/stdlib
+  # ANTHROPIC_API_KEY is injected from the 'anthropic' secret (key: api-key).
+
+# ─── Charradissa ─────────────────────────────────────────────────────────────
+charradissa:
+  image: ghcr.io/occitan/charradissa:latest
+  replicas: 1
+  port: 8448
+  env:
+    CHARRADISSA_CONFIG: /config/charradissa.toml
+  config:
+    org:
+      name: occitan
+      homeserver: "http://synapse:8008"
+    backend:
+      type: matrix
+    concierge:
+      archival_interval_hours: 24
+      convergence_interval_hours: 6
+      daily_token_budget: 100000
+    approval:
+      timeout_minutes: 60
+    tasks:
+      type: none
+    projects:
+      autodiscover: false
+  # ANTHROPIC_API_KEY from 'anthropic' secret; MATRIX_AS_TOKEN from 'charradissa' secret.
+
+# ─── Synapse (Matrix homeserver) ─────────────────────────────────────────────
+synapse:
+  image: matrixdotorg/synapse:latest
+  replicas: 1
+  serverName: occitane.guilhem
+  publicBaseurl: "http://occitane.guilhem:8008"
+  clientPort: 8008
+  federationPort: 8448
+  mediaStorage: 10Gi
+  # Registration is open by default for local dev. Disable in production:
+  enableRegistration: true
+  reportStats: false
+
+# ─── PostgreSQL (Synapse database) ───────────────────────────────────────────
+# Uses bitnami/postgresql subchart.
+postgresql:
+  enabled: true
+  auth:
+    username: synapse
+    password: synapse   # override via --set or sealed secrets in production
+    database: synapse
+  primary:
+    persistence:
+      size: 8Gi
+    initdb:
+      # Required by Synapse
+      args: "--encoding=UTF8 --lc-collate=C --lc-ctype=C"
+
+# ─── Element Web (Matrix client) ─────────────────────────────────────────────
+element:
+  image: vectorim/element-web:latest
+  replicas: 1
+  port: 80
+  brand: "Occitan"
