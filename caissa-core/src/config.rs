@@ -80,6 +80,14 @@ impl Default for SandboxConfig {
     }
 }
 
+/// On-disk format: caissa.toml has a [caissa] table and an optional [sandbox] table.
+#[derive(Debug, Deserialize)]
+struct ConfigFile {
+    caissa: CaissaConfig,
+    #[allow(dead_code)]
+    sandbox: Option<SandboxConfig>,
+}
+
 /// Load CaissaConfig from the first file found:
 ///   1. ./caissa.toml
 ///   2. ~/.config/caissa/caissa.toml
@@ -94,9 +102,9 @@ pub fn load_config() -> anyhow::Result<CaissaConfig> {
         if path.exists() {
             let text = std::fs::read_to_string(path)
                 .map_err(|e| anyhow::anyhow!("reading {}: {}", path.display(), e))?;
-            let cfg: CaissaConfig = toml::from_str(&text)
+            let file: ConfigFile = toml::from_str(&text)
                 .map_err(|e| anyhow::anyhow!("parsing {}: {}", path.display(), e))?;
-            return Ok(cfg);
+            return Ok(file.caissa);
         }
     }
 
