@@ -1,0 +1,6 @@
+apiVersion: v2
+name: dispatcher
+description: Caissa dispatcher — MCP server that creates k8s agent Jobs on behalf of Guilhem
+type: application
+version: 0.1.0
+appVersion: "guilhem"

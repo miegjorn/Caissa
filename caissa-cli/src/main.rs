@@ -58,6 +58,14 @@ enum Commands {
         #[arg(long, default_value_t = 8080)]
         port: u16,
     },
+    /// Run the agent dispatcher — MCP server that creates k8s Jobs for sub-agents.
+    /// Runs in k8s with a ServiceAccount that can create Jobs in the agents namespace.
+    /// Guilhem calls this via the dispatcher MCP server to invoke domain/facet agents.
+    Dispatch {
+        /// Port to listen on (default: 9090).
+        #[arg(long, default_value_t = 9090)]
+        port: u16,
+    },
     /// Run a command inside the Caissa sandbox container.
     Sandbox {
         /// Session identifier (e.g. Matrix room ID). Creates an isolated workspace
@@ -93,6 +101,7 @@ async fn main() -> anyhow::Result<()> {
             commands::spawn::run(&agent, project.as_deref(), session.as_deref(), generation.as_deref()).await
         }
         Commands::Listen { port } => commands::listen::run(port).await,
+        Commands::Dispatch { port } => commands::dispatch::run(port).await,
         Commands::Sandbox { session, args } => {
             commands::sandbox::run(session.as_deref(), &args).await
         }

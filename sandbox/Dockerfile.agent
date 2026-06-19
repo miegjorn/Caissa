@@ -25,6 +25,13 @@ COPY claude.md /root/.claude/CLAUDE.md
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# Bake Fondament domain + role definitions into the image so agents can
+# read them at runtime to assemble context for sub-agent invocations.
+# Guilhem reads /fondament/domains/<domain>.yaml and /fondament/roles/<facet>.yaml
+# before calling dispatcher.invoke_agent with the assembled context.
+COPY fondament_domains/ /fondament/domains/
+COPY fondament_roles/ /fondament/roles/
+
 WORKDIR /workspace
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

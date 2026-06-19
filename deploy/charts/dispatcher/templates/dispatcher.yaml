@@ -1,0 +1,94 @@
+---
+# ServiceAccount for the dispatcher — needs to create/watch Jobs in agents namespace
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: caissa-dispatcher
+  namespace: agents
+---
+# Role: create and watch Jobs in the agents namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: caissa-dispatcher
+  namespace: agents
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: caissa-dispatcher
+  namespace: agents
+subjects:
+  - kind: ServiceAccount
+    name: caissa-dispatcher
+    namespace: agents
+roleRef:
+  kind: Role
+  name: caissa-dispatcher
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dispatcher
+  namespace: agents
+  labels:
+    app: dispatcher
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dispatcher
+  template:
+    metadata:
+      labels:
+        app: dispatcher
+    spec:
+      serviceAccountName: caissa-dispatcher
+      containers:
+        - name: dispatcher
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["caissa", "dispatch", "--port", "{{ .Values.port }}"]
+          ports:
+            - name: mcp
+              containerPort: {{ .Values.port }}
+              protocol: TCP
+          env:
+            - name: AGENT_IMAGE
+              value: {{ .Values.agentImage | quote }}
+            - name: AGENTS_NAMESPACE
+              value: {{ .Values.agentsNamespace | quote }}
+            - name: FARGA_URL
+              value: {{ .Values.fargaUrl | quote }}
+            - name: FARGA_MCP_URL
+              value: {{ .Values.fargaMcpUrl | quote }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: mcp
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dispatcher
+  namespace: agents
+spec:
+  selector:
+    app: dispatcher
+  ports:
+    - name: mcp
+      port: 9090
+      targetPort: mcp
+  type: ClusterIP

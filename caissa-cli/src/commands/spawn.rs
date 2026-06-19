@@ -97,7 +97,8 @@ pub async fn run(
         "run".to_string(),
         "--rm".to_string(),
         "-it".to_string(),
-        // MCP service URLs — entrypoint.sh writes these into the Claude Code config
+        // Service URLs — entrypoint.sh writes MCP config and uses FARGA_URL for REST calls
+        "-e".to_string(), format!("FARGA_URL={}", config.farga_url),
         "-e".to_string(), format!("FARGA_MCP_URL={}", config.farga_mcp_url),
         "-e".to_string(), format!("DISPATCHER_MCP_URL={}", config.dispatcher_mcp_url),
         // Pass through the API key if set in the host environment
