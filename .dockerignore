@@ -1,0 +1,7 @@
+target/
+sandbox/
+deploy/
+docs/
+.git/
+workspaces/
+*.tgz
