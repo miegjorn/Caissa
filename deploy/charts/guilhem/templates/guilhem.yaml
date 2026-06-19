@@ -26,6 +26,7 @@ spec:
       containers:
         - name: guilhem
           image: {{ .Values.image }}
+          imagePullPolicy: Never
           # Webhook listener — accepts POST /trigger/chronicle from Argo Workflows.
           # Runs claude --print non-interactively when triggered; idle cost is zero.
           command: ["caissa", "listen", "--port", "8080"]
