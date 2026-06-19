@@ -2,6 +2,9 @@
 farga_url = "http://localhost:7500"
 project = "my-project"
 pii_patterns = ["email", "phone", "ssn"]
+# Per-session workspace volumes are created here: <workspaces_dir>/<session_id>/
+# and mounted at /workspace inside the container.
+workspaces_dir = "workspaces"
 
 [sandbox]
 image = "caissa-sandbox:latest"

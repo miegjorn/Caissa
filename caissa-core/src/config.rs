@@ -7,6 +7,8 @@ pub struct CaissaConfig {
     pub project: String,
     /// Named patterns to activate: "email", "phone", "ssn", "credit_card"
     pub pii_patterns: Vec<String>,
+    /// Base directory for per-session workspace volumes. Default: "./workspaces"
+    pub workspaces_dir: String,
 }
 
 impl Default for CaissaConfig {
@@ -15,6 +17,7 @@ impl Default for CaissaConfig {
             farga_url: "http://localhost:7500".into(),
             project: "default".into(),
             pii_patterns: vec!["email".into(), "phone".into()],
+            workspaces_dir: "workspaces".into(),
         }
     }
 }

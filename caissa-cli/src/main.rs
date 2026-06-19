@@ -13,6 +13,11 @@ struct Cli {
 enum Commands {
     /// Run a command inside the Caissa sandbox container.
     Sandbox {
+        /// Session identifier (e.g. Matrix room ID). Creates an isolated workspace
+        /// at <workspaces_dir>/<session> and mounts it at /workspace in the container.
+        /// Omitting this flag runs without a persistent workspace.
+        #[arg(long)]
+        session: Option<String>,
         /// Arguments forwarded verbatim to `docker run <image> <args...>`.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
@@ -32,7 +37,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let cfg = caissa_core::config::load_config().unwrap_or_default();
     match cli.command {
-        Commands::Sandbox { args } => commands::sandbox::run(&args).await,
+        Commands::Sandbox { session, args } => commands::sandbox::run(session.as_deref(), &args).await,
         Commands::Report { farga_url, project } => {
             let url = if farga_url == "http://localhost:7500" { cfg.farga_url } else { farga_url };
             let proj = if project == "default" { cfg.project } else { project };
