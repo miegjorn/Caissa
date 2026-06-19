@@ -30,10 +30,13 @@ enum Commands {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
     let cli = Cli::parse();
+    let cfg = caissa_core::config::load_config().unwrap_or_default();
     match cli.command {
         Commands::Sandbox { args } => commands::sandbox::run(&args).await,
         Commands::Report { farga_url, project } => {
-            commands::report::run(&farga_url, &project).await
+            let url = if farga_url == "http://localhost:7500" { cfg.farga_url } else { farga_url };
+            let proj = if project == "default" { cfg.project } else { project };
+            commands::report::run(&url, &proj).await
         }
     }
 }

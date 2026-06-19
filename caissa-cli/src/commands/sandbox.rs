@@ -1,4 +1,6 @@
-use caissa_core::config::SandboxConfig;
+use std::collections::HashMap;
+use caissa_core::config::{load_config, SandboxConfig};
+use caissa_core::pii::{PiiProxy, RegexPiiProxy};
 
 /// Build the `docker run` argument list from a SandboxConfig + user args.
 /// Extracted so it can be tested without spawning a real process.
@@ -20,9 +22,35 @@ pub fn build_docker_args(config: &SandboxConfig, user_args: &[String]) -> Vec<St
     args
 }
 
+/// Redact PII from each arg using the proxy. Returns (redacted_args, merged_vault).
+pub fn redact_args(proxy: &dyn PiiProxy, user_args: &[String]) -> (Vec<String>, HashMap<String, String>) {
+    let mut redacted = Vec::with_capacity(user_args.len());
+    let mut vault = HashMap::new();
+    for arg in user_args {
+        let (r, v) = proxy.redact(arg);
+        redacted.push(r);
+        vault.extend(v);
+    }
+    (redacted, vault)
+}
+
 pub async fn run(user_args: &[String]) -> anyhow::Result<()> {
-    let config = SandboxConfig::default();
-    let docker_args = build_docker_args(&config, user_args);
+    let config = load_config()?;
+    let sandbox = SandboxConfig::default();
+
+    let proxy = RegexPiiProxy::new(&config.pii_patterns)
+        .map_err(|e| anyhow::anyhow!("PII proxy init failed: {}", e))?;
+
+    let (redacted_args, vault) = redact_args(&proxy, user_args);
+
+    if !vault.is_empty() {
+        eprintln!("[caissa] PII redacted before sandbox invocation:");
+        for (placeholder, original) in &vault {
+            eprintln!("  {} → {}", placeholder, original);
+        }
+    }
+
+    let docker_args = build_docker_args(&sandbox, &redacted_args);
 
     let status = tokio::process::Command::new("docker")
         .args(&docker_args)
@@ -86,5 +114,26 @@ mod tests {
         let config = SandboxConfig::default(); // cpu_limit = None
         let args = build_docker_args(&config, &[]);
         assert!(!args.contains(&"--cpus".to_string()));
+    }
+
+    #[test]
+    fn redact_args_removes_email_from_args() {
+        let proxy = RegexPiiProxy::new(&["email".to_string()]).unwrap();
+        let args = vec![
+            "run".to_string(),
+            "contact user@example.com".to_string(),
+        ];
+        let (redacted, vault) = redact_args(&proxy, &args);
+        assert!(!redacted[1].contains("user@example.com"), "email must be redacted");
+        assert!(vault.values().any(|v| v == "user@example.com"), "vault must hold original");
+    }
+
+    #[test]
+    fn redact_args_clean_input_unchanged() {
+        let proxy = RegexPiiProxy::new(&["email".to_string(), "phone".to_string()]).unwrap();
+        let args = vec!["echo".to_string(), "hello world".to_string()];
+        let (redacted, vault) = redact_args(&proxy, &args);
+        assert_eq!(redacted, args);
+        assert!(vault.is_empty());
     }
 }
