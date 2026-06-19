@@ -1,0 +1,10 @@
+[caissa]
+farga_url = "http://localhost:7500"
+project = "my-project"
+pii_patterns = ["email", "phone", "ssn"]
+
+[sandbox]
+image = "caissa-sandbox:latest"
+network = "none"
+memory_limit = "2g"
+# cpu_limit = "1.5"
