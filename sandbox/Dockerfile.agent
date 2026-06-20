@@ -9,7 +9,12 @@
 # Build: caissa build <generation>
 # Run:   caissa spawn <generation> [--project <proj>] [--session <id>]
 
-FROM node:20-slim
+# Source of the linux caissa binary (built into caissa:latest). Requires caissa:latest
+# to be present in the local image store at build time.
+FROM caissa:latest AS caissabin
+
+# trixie (glibc 2.39) to match the caissa binary built on rust:1.90-slim/trixie.
+FROM node:20-trixie-slim
 
 # python3 needed by entrypoint.sh task mode (posts result to Farga REST)
 RUN apt-get update && apt-get install -y --no-install-recommends python3 \
@@ -17,6 +22,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 \
 
 # Install Claude Code
 RUN npm install -g @anthropic-ai/claude-code
+
+# The caissa binary — Guilhem's pod runs `caissa listen` (the event listener) and
+# the binary also drives chronicle runs. Without it the deployment can't start.
+COPY --from=caissabin /usr/local/bin/caissa /usr/local/bin/caissa
 
 # Bake the agent persona into the home directory.
 # This is the identity layer — who the agent is, not what it knows right now.
