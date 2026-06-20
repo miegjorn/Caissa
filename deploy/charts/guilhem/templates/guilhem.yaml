@@ -1,8 +1,25 @@
 # Guilhem agent Deployment.
 # The pod runs a lightweight event listener (always on, ~0 cost).
 # Claude Code is only invoked when an event warrants a chronicle run.
-# See task #7 for the event listener implementation.
 
+# caissa.toml — load_config() reads ./caissa.toml (cwd is /workspace). The FARGA_URL
+# env alone is ignored by the binary, so the listener needs this file to reach Farga.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: guilhem-caissa
+  namespace: agents
+  labels:
+    app.kubernetes.io/name: guilhem
+data:
+  caissa.toml: |
+    [caissa]
+    farga_url = {{ .Values.farga.url | quote }}
+    project = {{ .Values.farga.project | quote }}
+    generation = "guilhem"
+    farga_mcp_url = "http://farga.occitan-system.svc.cluster.local:7500/mcp"
+    dispatcher_mcp_url = "http://dispatcher.agents.svc.cluster.local:9090/mcp"
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -45,6 +62,11 @@ spec:
                   name: anthropic
                   key: api-key
                   optional: false
+          volumeMounts:
+            - name: caissa-config
+              mountPath: /workspace/caissa.toml
+              subPath: caissa.toml
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /health
@@ -53,6 +75,10 @@ spec:
             periodSeconds: 10
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: caissa-config
+          configMap:
+            name: guilhem-caissa
 ---
 apiVersion: v1
 kind: Service
