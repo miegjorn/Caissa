@@ -16,9 +16,17 @@ data:
     [caissa]
     farga_url = {{ .Values.farga.url | quote }}
     project = {{ .Values.farga.project | quote }}
+    pii_patterns = ["email", "phone"]
+    workspaces_dir = "workspaces"
+    fondament_path = "/fondament"
     generation = "guilhem"
     farga_mcp_url = "http://farga.occitan-system.svc.cluster.local:7500/mcp"
     dispatcher_mcp_url = "http://dispatcher.agents.svc.cluster.local:9090/mcp"
+
+    [sandbox]
+    image = "caissa-sandbox:latest"
+    network = "none"
+    memory_limit = "2g"
 ---
 apiVersion: apps/v1
 kind: Deployment
