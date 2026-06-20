@@ -33,6 +33,8 @@ struct SignalPayload {
 
 #[derive(Serialize)]
 struct SignalItem {
+    // Farga's Signal requires project on each item (not just the envelope).
+    project: String,
     content: String,
     source: String,
 }
@@ -126,6 +128,7 @@ async fn post_signal(state: &ListenState, content: &str) -> anyhow::Result<()> {
     let payload = SignalPayload {
         project: state.farga_project.clone(),
         signals: vec![SignalItem {
+            project: state.farga_project.clone(),
             content: content.to_string(),
             source: "guilhem-daemon".into(),
         }],
