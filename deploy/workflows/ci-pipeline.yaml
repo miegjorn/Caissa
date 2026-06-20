@@ -33,7 +33,7 @@ spec:
             arguments:
               parameters:
                 - name: repo
-                  value: "https://github.com/occitan/{{workflow.parameters.service}}.git"
+                  value: "https://github.com/miegjorn/{{workflow.parameters.service}}.git"
                 - name: service
                   value: "{{workflow.parameters.service}}"
                 - name: registry

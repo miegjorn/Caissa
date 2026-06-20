@@ -144,12 +144,12 @@ if [ -n "${ARGOCD_PASSWORD}" ]; then
 
   blue "Registering GitHub repo with ArgoCD..."
   yellow "If Caissa is a private GitHub repo, provide credentials:"
-  yellow "  argocd repo add https://github.com/occitan/Caissa.git --username <user> --password <token>"
-  yellow "  or: argocd repo add git@github.com:occitan/Caissa.git --ssh-private-key-path ~/.ssh/id_ed25519"
+  yellow "  argocd repo add https://github.com/miegjorn/Caissa.git --username <user> --password <token>"
+  yellow "  or: argocd repo add git@github.com:miegjorn/Caissa.git --ssh-private-key-path ~/.ssh/id_ed25519"
 fi
 
 # ─── ghcr.io pull secret ─────────────────────────────────────────────────────
-# Required for pods to pull private ghcr.io/occitan/* images.
+# Required for pods to pull private ghcr.io/miegjorn/* images.
 # Create a GitHub PAT with read:packages scope and set GHCR_PAT before running.
 if [ -n "${GHCR_PAT:-}" ]; then
   blue "Creating ghcr-creds imagePullSecret in occitan-system and agents namespaces..."
@@ -185,4 +185,4 @@ echo "ArgoCD initial admin password: ${ARGOCD_PASSWORD:-run: kubectl -n argocd g
 echo "ArgoCD UI:  https://localhost:8080  (after: kubectl port-forward svc/argocd-server -n argocd 8080:443)"
 echo ""
 green "Bootstrap complete. Occitan cluster '${CLUSTER_NAME}' is ready."
-echo "Guilhem will be live once ArgoCD syncs the first CI-built image from ghcr.io/occitan/."
+echo "Guilhem will be live once ArgoCD syncs the first CI-built image from ghcr.io/miegjorn/."

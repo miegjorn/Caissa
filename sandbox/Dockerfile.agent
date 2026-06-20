@@ -11,7 +11,7 @@
 
 # Source of the linux caissa binary (built into caissa:latest). Requires caissa:latest
 # to be present in the local image store at build time.
-FROM ghcr.io/occitan/caissa:latest AS caissabin
+FROM ghcr.io/miegjorn/caissa:latest AS caissabin
 
 # trixie (glibc 2.39) to match the caissa binary built on rust:1.90-slim/trixie.
 FROM node:20-trixie-slim

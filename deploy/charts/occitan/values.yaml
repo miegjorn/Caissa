@@ -8,7 +8,7 @@ imagePullSecrets:
 
 # ─── Gardian ─────────────────────────────────────────────────────────────────
 gardian:
-  image: ghcr.io/occitan/gardian
+  image: ghcr.io/miegjorn/gardian
   imageTag: latest   # CI writes sha-<sha> here on every main push
   replicas: 1
   # gardian-server currently hardcodes 0.0.0.0:7400 and ignores GARDIAN_PORT.
@@ -31,7 +31,7 @@ openbao:
 
 # ─── Farga ───────────────────────────────────────────────────────────────────
 farga:
-  image: ghcr.io/occitan/farga
+  image: ghcr.io/miegjorn/farga
   imageTag: latest   # CI writes sha-<sha> here on every main push
   replicas: 1
   port: 7500
@@ -44,7 +44,7 @@ farga:
 # ─── Amassada ────────────────────────────────────────────────────────────────
 # Canvases are baked into the image at /canvases/stdlib.
 amassada:
-  image: ghcr.io/occitan/amassada
+  image: ghcr.io/miegjorn/amassada
   imageTag: latest   # CI writes sha-<sha> here on every main push
   replicas: 1
   port: 7700
@@ -55,7 +55,7 @@ amassada:
 
 # ─── Charradissa ─────────────────────────────────────────────────────────────
 charradissa:
-  image: ghcr.io/occitan/charradissa
+  image: ghcr.io/miegjorn/charradissa
   imageTag: latest   # CI writes sha-<sha> here on every main push
   replicas: 1
   port: 8448

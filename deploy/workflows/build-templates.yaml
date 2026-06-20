@@ -109,7 +109,7 @@ spec:
             arguments:
               parameters:
                 - name: repo
-                  value: "https://github.com/occitan/Caissa.git"
+                  value: "https://github.com/miegjorn/Caissa.git"
                 - name: revision
                   value: "{{inputs.parameters.caissa-revision}}"
                 - name: dest
@@ -119,7 +119,7 @@ spec:
             arguments:
               parameters:
                 - name: repo
-                  value: "https://github.com/occitan/Fondament.git"
+                  value: "https://github.com/miegjorn/Fondament.git"
                 - name: revision
                   value: "{{inputs.parameters.fondament-revision}}"
                 - name: dest
