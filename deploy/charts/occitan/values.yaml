@@ -5,10 +5,12 @@
 gardian:
   image: ghcr.io/occitan/gardian:latest
   replicas: 1
-  port: 7600
+  # gardian-server currently hardcodes 0.0.0.0:7400 and ignores GARDIAN_PORT.
+  # TODO(gardian): make gardian-server honour GARDIAN_PORT, then this can move.
+  port: 7400
   env:
     GARDIAN_MODE: server
-    GARDIAN_PORT: "7600"
+    GARDIAN_PORT: "7400"
 
 # ─── Farga ───────────────────────────────────────────────────────────────────
 farga:
