@@ -1,0 +1,70 @@
+{{- if .Values.openbao.enabled }}
+# OpenBao (MPL-2.0 fork of Vault) — the secret backend Gardian fronts.
+# DEV MODE: in-memory storage, auto-unsealed, fixed root token from the 'openbao' secret.
+# Data does NOT survive a pod restart — re-seed after a restart. Persistent file-storage +
+# auto-unseal is the hardening follow-up.
+apiVersion: v1
+kind: Service
+metadata:
+  name: openbao
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "occitan.selectorLabels" (dict "component" "openbao" "context" .) | nindent 4 }}
+  ports:
+    - port: 8200
+      targetPort: 8200
+      name: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openbao
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+    {{- include "occitan.selectorLabels" (dict "component" "openbao" "context" .) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "occitan.selectorLabels" (dict "component" "openbao" "context" .) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "occitan.selectorLabels" (dict "component" "openbao" "context" .) | nindent 8 }}
+    spec:
+      containers:
+        - name: openbao
+          image: {{ .Values.openbao.image }}
+          imagePullPolicy: IfNotPresent
+          args: ["server", "-dev", "-dev-listen-address=0.0.0.0:8200"]
+          env:
+            - name: BAO_DEV_ROOT_TOKEN_ID
+              valueFrom:
+                secretKeyRef:
+                  name: openbao
+                  key: token
+            - name: BAO_DEV_LISTEN_ADDRESS
+              value: "0.0.0.0:8200"
+            - name: BAO_ADDR
+              value: "http://127.0.0.1:8200"
+          ports:
+            - containerPort: 8200
+              name: http
+          readinessProbe:
+            httpGet:
+              # 200 = unsealed+active (dev mode is always unsealed).
+              path: /v1/sys/health
+              port: 8200
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+{{- end }}

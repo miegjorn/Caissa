@@ -28,6 +28,13 @@ spec:
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
+            {{- if .Values.openbao.enabled }}
+            - name: BAO_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: openbao
+                  key: token
+            {{- end }}
           readinessProbe:
             # No /health route yet; TCP check confirms the listener is up.
             tcpSocket:

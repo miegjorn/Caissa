@@ -11,6 +11,16 @@ gardian:
   env:
     GARDIAN_MODE: server
     GARDIAN_PORT: "7400"
+    # OpenBao backend: when BAO_ADDR is set gardian-server fronts OpenBao instead of .env.
+    BAO_ADDR: "http://openbao:8200"
+    BAO_MOUNT: secret
+    BAO_FIELD: value
+    # BAO_TOKEN is injected from the 'openbao' secret (see gardian deployment template).
+
+# ─── OpenBao (secret backend Gardian fronts) ─────────────────────────────────
+openbao:
+  enabled: true
+  image: openbao/openbao:latest
 
 # ─── Farga ───────────────────────────────────────────────────────────────────
 farga:
