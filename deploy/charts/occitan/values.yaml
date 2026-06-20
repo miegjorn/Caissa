@@ -5,11 +5,10 @@
 # Create the secret with: scripts/bootstrap.sh (or manually — see docs/install.md).
 imagePullSecrets:
   - name: ghcr-creds
-
 # ─── Gardian ─────────────────────────────────────────────────────────────────
 gardian:
   image: ghcr.io/miegjorn/gardian
-  imageTag: latest   # CI writes sha-<sha> here on every main push
+  imageTag: latest # CI writes sha-<sha> here on every main push
   replicas: 1
   # gardian-server currently hardcodes 0.0.0.0:7400 and ignores GARDIAN_PORT.
   # TODO(gardian): make gardian-server honour GARDIAN_PORT, then this can move.
@@ -22,17 +21,15 @@ gardian:
     BAO_MOUNT: secret
     BAO_FIELD: value
     # BAO_TOKEN is injected from the 'openbao' secret (see gardian deployment template).
-
 # ─── OpenBao (secret backend Gardian fronts) ─────────────────────────────────
 openbao:
   enabled: true
   image: openbao/openbao:latest
   storage: 1Gi
-
 # ─── Farga ───────────────────────────────────────────────────────────────────
 farga:
   image: ghcr.io/miegjorn/farga
-  imageTag: latest   # CI writes sha-<sha> here on every main push
+  imageTag: latest # CI writes sha-<sha> here on every main push
   replicas: 1
   port: 7500
   storage: 5Gi
@@ -40,23 +37,21 @@ farga:
     FARGA_PORT: "7500"
     FARGA_DB: /data/farga.db
     FARGA_DOCS: /data/docs
-
 # ─── Amassada ────────────────────────────────────────────────────────────────
 # Canvases are baked into the image at /canvases/stdlib.
 amassada:
   image: ghcr.io/miegjorn/amassada
-  imageTag: latest   # CI writes sha-<sha> here on every main push
+  imageTag: sha-b1df616 # CI writes sha-<sha> here on every main push
   replicas: 1
   port: 7700
   env:
     AMASSADA_PORT: "7700"
     AMASSADA_CANVAS_DIR: /canvases/stdlib
   # ANTHROPIC_API_KEY is injected from the 'anthropic' secret (key: api-key).
-
 # ─── Charradissa ─────────────────────────────────────────────────────────────
 charradissa:
   image: ghcr.io/miegjorn/charradissa
-  imageTag: latest   # CI writes sha-<sha> here on every main push
+  imageTag: latest # CI writes sha-<sha> here on every main push
   replicas: 1
   port: 8448
   env:
@@ -85,7 +80,6 @@ charradissa:
     projects:
       autodiscover: false
   # ANTHROPIC_API_KEY from 'anthropic' secret; MATRIX_AS_TOKEN from 'charradissa' secret.
-
 # ─── Synapse (Matrix homeserver) ─────────────────────────────────────────────
 synapse:
   image: matrixdotorg/synapse:latest
@@ -98,7 +92,6 @@ synapse:
   # Registration is open by default for local dev. Disable in production:
   enableRegistration: true
   reportStats: false
-
 # ─── PostgreSQL (Synapse database) ───────────────────────────────────────────
 # In-chart StatefulSet using the official postgres image (templates/postgresql.yaml).
 postgresql:
@@ -106,13 +99,12 @@ postgresql:
   image: postgres:15-alpine
   auth:
     username: synapse
-    password: synapse   # override via --set or sealed secrets in production
+    password: synapse # override via --set or sealed secrets in production
     database: synapse
   persistence:
     size: 8Gi
   # Required by Synapse — C collation/ctype at initdb time.
   initdbArgs: "--encoding=UTF8 --lc-collate=C --lc-ctype=C"
-
 # ─── Element Web (Matrix client) ─────────────────────────────────────────────
 element:
   image: vectorim/element-web:latest
