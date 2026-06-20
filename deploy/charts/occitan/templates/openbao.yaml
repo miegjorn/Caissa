@@ -64,19 +64,21 @@ data:
 
   entrypoint.sh: |
     #!/bin/sh
-    set -e
     export BAO_ADDR=http://127.0.0.1:8200
 
     # Start the server in the background; we'll foreground it at the end.
     bao server -config=/bao-config/config.hcl &
     BAO_PID=$!
 
+    # Wait until the HTTP endpoint responds (any status code — 501 = not-initialized is fine).
+    # bao status exits 2 when sealed/uninitialised, so we can't use `until bao status`.
     echo "[openbao] waiting for server to respond..."
-    until bao status >/dev/null 2>&1; do sleep 0.5; done
+    until curl -s -o /dev/null http://127.0.0.1:8200/v1/sys/health; do sleep 0.5; done
+    echo "[openbao] server is up"
 
     INITIALIZED=$(bao status -format=json 2>/dev/null \
-      | python3 -c "import sys,json; print(json.load(sys.stdin)['initialized'])" 2>/dev/null \
-      || echo "False")
+      | python3 -c "import sys,json; print(json.load(sys.stdin)['initialized'])" 2>/dev/null) \
+      || INITIALIZED="False"
 
     if [ "$INITIALIZED" = "False" ]; then
       echo "[openbao] first run — initialising..."
