@@ -32,6 +32,10 @@ pub struct CaissaConfig {
     /// Override per-deployment: chronicle_model = "claude-sonnet-4-6"
     #[serde(default = "default_chronicle_model")]
     pub chronicle_model: String,
+    /// Model used for interactive Matrix reply runs (`caissa listen /matrix/reply`).
+    /// Defaults to Sonnet — interactive sessions need quality over speed.
+    #[serde(default = "default_matrix_model")]
+    pub matrix_model: String,
 }
 
 fn default_fondament_path() -> String {
@@ -54,6 +58,10 @@ fn default_chronicle_model() -> String {
     "claude-haiku-4-5-20251001".into()
 }
 
+fn default_matrix_model() -> String {
+    "claude-sonnet-4-6".into()
+}
+
 impl Default for CaissaConfig {
     fn default() -> Self {
         Self {
@@ -67,6 +75,7 @@ impl Default for CaissaConfig {
             farga_mcp_url: default_farga_mcp_url(),
             dispatcher_mcp_url: default_dispatcher_mcp_url(),
             chronicle_model: default_chronicle_model(),
+            matrix_model: default_matrix_model(),
         }
     }
 }
@@ -124,6 +133,7 @@ pub fn load_config() -> anyhow::Result<CaissaConfig> {
     if let Ok(v) = std::env::var("FARGA_URL")          { config.farga_url = v; }
     if let Ok(v) = std::env::var("FARGA_PROJECT")      { config.project = v; }
     if let Ok(v) = std::env::var("CHRONICLE_MODEL")    { config.chronicle_model = v; }
+    if let Ok(v) = std::env::var("MATRIX_MODEL")       { config.matrix_model = v; }
     Ok(config)
 }
 

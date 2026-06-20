@@ -18,6 +18,7 @@ struct ListenState {
     farga_project: String,
     farga_mcp_url: String,
     chronicle_model: String,
+    matrix_model: String,
 }
 
 #[derive(Deserialize)]
@@ -50,10 +51,12 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         farga_project: config.project,
         farga_mcp_url: config.farga_mcp_url,
         chronicle_model: config.chronicle_model,
+        matrix_model: config.matrix_model,
     });
 
     let app = Router::new()
         .route("/trigger/chronicle", post(handle_chronicle))
+        .route("/matrix/reply", post(handle_matrix_reply))
         .route("/health", axum::routing::get(|| async { "ok" }))
         .with_state(state);
 
@@ -147,6 +150,94 @@ async fn run_chronicle(state: &ListenState, prompt: &str) -> anyhow::Result<()> 
     }
 
     Ok(())
+}
+
+// ── Matrix reply ──────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct MatrixReplyReq {
+    pub room_id: String,
+    pub sender: String,
+    pub content: String,
+    #[serde(default)]
+    pub history: Vec<MatrixHistoryEntry>,
+}
+
+#[derive(Deserialize)]
+pub struct MatrixHistoryEntry {
+    pub sender: String,
+    pub content: String,
+}
+
+#[derive(Serialize)]
+pub struct MatrixReplyResp {
+    pub text: String,
+}
+
+async fn handle_matrix_reply(
+    State(state): State<Arc<ListenState>>,
+    Json(req): Json<MatrixReplyReq>,
+) -> (axum::http::StatusCode, Json<MatrixReplyResp>) {
+    match run_matrix_reply(&state, &req).await {
+        Ok(text) => (axum::http::StatusCode::OK, Json(MatrixReplyResp { text })),
+        Err(e) => {
+            tracing::error!("matrix reply failed: {}", e);
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(MatrixReplyResp { text: format!("(guilhem error: {})", e) }),
+            )
+        }
+    }
+}
+
+async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::Result<String> {
+    let mut prompt = format!("Matrix room: {}\n\nConversation history (oldest first):\n", req.room_id);
+    for entry in &req.history {
+        prompt.push_str(&format!("{}: {}\n", entry.sender, entry.content));
+    }
+    prompt.push_str(&format!(
+        "\nLatest message from {}:\n{}\n\nReply as Guilhem.",
+        req.sender, req.content
+    ));
+
+    // Farga MCP for memory access. Written per-call so concurrent requests
+    // don't race on the same file path.
+    let mcp_config = format!(
+        r#"{{"mcpServers":{{"farga":{{"type":"http","url":"{}"}}}}}}"#,
+        state.farga_mcp_url
+    );
+    let mcp_path = std::env::temp_dir().join(format!(
+        "guilhem-matrix-mcp-{}.json",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::write(&mcp_path, &mcp_config)?;
+
+    let output = tokio::process::Command::new("claude")
+        .args([
+            "--print",
+            &prompt,
+            "--model",
+            &state.matrix_model,
+            "--mcp-config",
+            mcp_path.to_str().unwrap(),
+            // Bash gives access to gh, glab, git, curl etc.
+            // Farga MCP tools for structured memory reads.
+            "--allowed-tools",
+            "Bash,mcp__farga__search_signals,mcp__farga__read_context,mcp__farga__list_projects",
+        ])
+        .env("FARGA_URL", &state.farga_url)
+        .env("FARGA_PROJECT", &state.farga_project)
+        .output()
+        .await?;
+
+    let _ = std::fs::remove_file(&mcp_path);
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("claude exited non-zero: {}", stderr);
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 async fn post_signal(state: &ListenState, content: &str) -> anyhow::Result<()> {

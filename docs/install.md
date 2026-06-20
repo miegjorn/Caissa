@@ -360,10 +360,25 @@ posted to Farga as a signal — confirm with
 `curl http://farga.occitan-system.svc.cluster.local:7500/signals/recent?project=occitan`.
 The scheduled CronWorkflow fires every 6 hours automatically.
 
-> The chronicle prompt asks Claude to read/write Farga directly, but in a headless
-> `claude --print` run its shell tools are gated. The reliable path today is that `caissa`
-> posts Claude's output to Farga for it. Attaching the Farga MCP (`farga_mcp_url`) to the
-> chronicle run is the planned fix to give Claude a grounded read of the stack.
+Chronicle runs attach the Farga MCP server (`farga_mcp_url`) so Claude reads live stack
+state via tools instead of shelling out. Claude's output is then posted to Farga as a
+signal by `caissa`.
+
+**Guilhem in Matrix rooms:** Charradissa is the Matrix transport layer; it forwards every
+message to Guilhem's `POST /matrix/reply` endpoint. Guilhem runs `claude --print` with
+his full persona, Farga MCP, and `Bash` allowed — so `gh`, `glab`, and `git` are all
+available in the conversation. Set `GUILHEM_URL` in the Charradissa env (defaults to
+`http://guilhem.agents.svc.cluster.local:8080`) and `matrix_model` in `caissa.toml`
+(defaults to `claude-sonnet-4-6`).
+
+Trigger a manual Matrix reply test:
+
+```bash
+kubectl exec -n agents deployment/guilhem -- \
+  curl -s -X POST http://localhost:8080/matrix/reply \
+    -H 'Content-Type: application/json' \
+    -d '{"room_id":"!test:occitane.guilhem","sender":"@pierre-luc:occitane.guilhem","content":"hello guilhem","history":[]}'
+```
 
 ### Guilhem's GitHub / GitLab access
 
@@ -378,9 +393,8 @@ kubectl exec -n agents "$GP" -- sh -lc '. /creds/tokens.env; gh api user --jq .l
 kubectl exec -n agents "$GP" -- sh -lc '. /creds/tokens.env; glab api user | python3 -c "import sys,json;print(json.load(sys.stdin)[\"username\"])"'
 ```
 
-> GitLab needs a token with `read_repository`/`read_user` (a classic PAT, or a fine-grained
-> one with those scopes) — a narrowly-scoped token returns `403 insufficient_granular_scope`.
 > To rotate a token: `echo -n "$NEW" | scripts/seed-secret.sh occitan/gitlab --restart agents/guilhem`.
+> Note: the classic GitLab PAT zshrc var is named `GITLAN_PAT_CLASSIC_TOKEN` (typo: GITLAN not GITLAB).
 
 ---
 
