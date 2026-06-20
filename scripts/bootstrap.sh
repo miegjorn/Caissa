@@ -119,7 +119,6 @@ echo ""
 
 # ─── Helm dependency lock ────────────────────────────────────────────────────
 blue "Locking Helm chart dependencies..."
-helm repo add bitnami https://charts.bitnami.com/bitnami --force-update
 helm dependency update deploy/charts/occitan
 green "Chart.lock generated — commit deploy/charts/occitan/Chart.lock and deploy/charts/occitan/charts/"
 
@@ -136,11 +135,6 @@ if [ -n "${ARGOCD_PASSWORD}" ]; then
     --insecure 2>/dev/null || \
   argocd login localhost:8080 --username admin --password "${ARGOCD_PASSWORD}" --insecure 2>/dev/null || \
   yellow "ArgoCD CLI login failed — run manually after port-forward (see docs/install.md)"
-
-  blue "Registering bitnami Helm repo with ArgoCD..."
-  argocd repo add https://charts.bitnami.com/bitnami \
-    --type helm --name bitnami 2>/dev/null && green "bitnami repo registered" || \
-    yellow "bitnami repo registration skipped (may already exist)"
 
   blue "Registering GitHub repo with ArgoCD..."
   yellow "If Caissa is a private GitHub repo, provide credentials:"
