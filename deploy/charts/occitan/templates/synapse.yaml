@@ -57,8 +57,12 @@ data:
     enable_registration: {{ .Values.synapse.enableRegistration }}
     enable_registration_without_verification: {{ .Values.synapse.enableRegistration }}
 
+    {{- if .Values.charradissa.appservice.enabled }}
+    # Enable once the charradissa appservice registration is provisioned onto /data
+    # and the matching as-token secret exists (see charradissa.appservice in values).
     app_service_config_files:
       - /data/charradissa-registration.yaml
+    {{- end }}
 
     federation_domain_whitelist: []
     allow_public_rooms_without_auth: true

@@ -37,7 +37,8 @@ metadata:
     {{- include "occitan.labels" . | nindent 4 }}
     {{- include "occitan.selectorLabels" (dict "component" "charradissa" "context" .) | nindent 4 }}
 spec:
-  replicas: {{ .Values.charradissa.replicas }}
+  # Stays at 0 until the Matrix appservice is wired (needs the 'charradissa' secret).
+  replicas: {{ if .Values.charradissa.appservice.enabled }}{{ .Values.charradissa.replicas }}{{ else }}0{{ end }}
   selector:
     matchLabels:
       {{- include "occitan.selectorLabels" (dict "component" "charradissa" "context" .) | nindent 6 }}
@@ -74,8 +75,8 @@ spec:
             - name: config
               mountPath: /config
           readinessProbe:
-            httpGet:
-              path: /health
+            # No /health route yet; TCP check confirms the listener is up.
+            tcpSocket:
               port: {{ .Values.charradissa.port }}
             initialDelaySeconds: 10
             periodSeconds: 15

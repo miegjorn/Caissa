@@ -41,6 +41,12 @@ charradissa:
   port: 8448
   env:
     CHARRADISSA_CONFIG: /config/charradissa.toml
+  # Matrix appservice wiring. While disabled, Synapse starts without the
+  # charradissa registration and charradissa stays scaled to 0 (it needs the
+  # 'charradissa' secret with key as-token). Enable once the registration file
+  # and matching token are provisioned. See TODO in deploy notes.
+  appservice:
+    enabled: false
   config:
     org:
       name: occitan
