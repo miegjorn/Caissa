@@ -36,6 +36,10 @@ pub struct CaissaConfig {
     /// Defaults to Sonnet — interactive sessions need quality over speed.
     #[serde(default = "default_matrix_model")]
     pub matrix_model: String,
+    /// Amassada event bus URL. When set, matrix reply events are published there
+    /// so WebSocket subscribers get cross-session visibility.
+    #[serde(default = "default_amassada_url")]
+    pub amassada_url: String,
 }
 
 fn default_fondament_path() -> String {
@@ -62,6 +66,10 @@ fn default_matrix_model() -> String {
     "claude-sonnet-4-6".into()
 }
 
+fn default_amassada_url() -> String {
+    "http://amassada.occitan-system.svc.cluster.local:7600".into()
+}
+
 impl Default for CaissaConfig {
     fn default() -> Self {
         Self {
@@ -76,6 +84,7 @@ impl Default for CaissaConfig {
             dispatcher_mcp_url: default_dispatcher_mcp_url(),
             chronicle_model: default_chronicle_model(),
             matrix_model: default_matrix_model(),
+            amassada_url: default_amassada_url(),
         }
     }
 }
@@ -134,6 +143,7 @@ pub fn load_config() -> anyhow::Result<CaissaConfig> {
     if let Ok(v) = std::env::var("FARGA_PROJECT")      { config.project = v; }
     if let Ok(v) = std::env::var("CHRONICLE_MODEL")    { config.chronicle_model = v; }
     if let Ok(v) = std::env::var("MATRIX_MODEL")       { config.matrix_model = v; }
+    if let Ok(v) = std::env::var("AMASSADA_URL")       { config.amassada_url = v; }
     Ok(config)
 }
 

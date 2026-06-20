@@ -19,6 +19,7 @@ struct ListenState {
     farga_mcp_url: String,
     chronicle_model: String,
     matrix_model: String,
+    amassada_url: String,
 }
 
 #[derive(Deserialize)]
@@ -52,6 +53,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         farga_mcp_url: config.farga_mcp_url,
         chronicle_model: config.chronicle_model,
         matrix_model: config.matrix_model,
+        amassada_url: config.amassada_url,
     });
 
     let app = Router::new()
@@ -179,7 +181,30 @@ async fn handle_matrix_reply(
     Json(req): Json<MatrixReplyReq>,
 ) -> (axum::http::StatusCode, Json<MatrixReplyResp>) {
     match run_matrix_reply(&state, &req).await {
-        Ok(text) => (axum::http::StatusCode::OK, Json(MatrixReplyResp { text })),
+        Ok(text) => {
+            // Fire-and-forget: publish a BtwEmitted event to Amassada so subscribers
+            // have cross-session visibility of matrix activity.
+            let amassada_url = state.amassada_url.clone();
+            let room = req.room_id.clone();
+            let sender = req.sender.clone();
+            let preview = text.chars().take(200).collect::<String>();
+            tokio::spawn(async move {
+                let event = serde_json::json!({
+                    "BtwEmitted": {
+                        "from": "guilhem",
+                        "to": room,
+                        "content": format!("[{}] {}", sender, preview)
+                    }
+                });
+                let _ = reqwest::Client::new()
+                    .post(format!("{}/events", amassada_url))
+                    .json(&event)
+                    .timeout(std::time::Duration::from_secs(2))
+                    .send()
+                    .await;
+            });
+            (axum::http::StatusCode::OK, Json(MatrixReplyResp { text }))
+        }
         Err(e) => {
             tracing::error!("matrix reply failed: {}", e);
             (
