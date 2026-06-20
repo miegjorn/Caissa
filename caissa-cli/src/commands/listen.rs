@@ -16,6 +16,7 @@ use caissa_core::config::load_config;
 struct ListenState {
     farga_url: String,
     farga_project: String,
+    farga_mcp_url: String,
 }
 
 #[derive(Deserialize)]
@@ -46,6 +47,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
     let state = Arc::new(ListenState {
         farga_url: config.farga_url,
         farga_project: config.project,
+        farga_mcp_url: config.farga_mcp_url,
     });
 
     let app = Router::new()
@@ -67,7 +69,9 @@ async fn handle_chronicle(
 ) -> StatusCode {
     tracing::info!("chronicle trigger received: {}", req.reason);
 
-    let prompt = req.prompt.unwrap_or_else(|| build_chronicle_prompt(&req.reason));
+    let prompt = req
+        .prompt
+        .unwrap_or_else(|| build_chronicle_prompt(&req.reason, &state.farga_project));
 
     tokio::spawn(async move {
         match run_chronicle(&state, &prompt).await {
@@ -79,23 +83,22 @@ async fn handle_chronicle(
     StatusCode::ACCEPTED
 }
 
-fn build_chronicle_prompt(reason: &str) -> String {
+fn build_chronicle_prompt(reason: &str, project: &str) -> String {
     format!(
         r#"Chronicle trigger: {reason}
 
 You are Guilhem de Tudela, chronicler of the Occitan stack. This is a scheduled
-chronicle run.
+chronicle run for project "{project}".
 
-Your task:
-1. Check recent signals in Farga: curl $FARGA_URL/signals/recent?project=$FARGA_PROJECT
-2. Review any significant activity (git logs if repos are accessible, recent session
-   outputs, decisions made).
-3. Write a concise chronicle entry — what happened, what it means for the trajectory,
-   what is now different from before.
-4. Post your chronicle as a signal:
-   curl -X POST $FARGA_URL/signals \
-     -H 'Content-Type: application/json' \
-     -d '{{"project":"$FARGA_PROJECT","signals":[{{"content":"<your chronicle>","source":"guilhem"}}]}}'
+You have the Farga MCP server attached. Ground your chronicle in real state — use its
+read tools before writing:
+- search_signals (project: "{project}") — recent signals / activity
+- read_context (project: "{project}") — accumulated project context
+- list_projects — what projects exist
+
+Then write a concise chronicle entry: what happened, what it means for the trajectory,
+what is now different from before. Your written response IS the chronicle — it is
+recorded to Farga automatically, so do not try to post it yourself.
 
 Be faithful, not verbose. The chronicle is for future agents (including your next
 instance) to understand where the stack stands.
@@ -104,8 +107,25 @@ instance) to understand where the stack stands.
 }
 
 async fn run_chronicle(state: &ListenState, prompt: &str) -> anyhow::Result<()> {
+    // Attach the Farga MCP server so Claude reads live state via tools instead of
+    // shelling out (its bash tools are gated in headless --print runs). Only the read
+    // tools are allowed — writes go through caissa's post_signal below.
+    let mcp_config = format!(
+        r#"{{"mcpServers":{{"farga":{{"type":"http","url":"{}"}}}}}}"#,
+        state.farga_mcp_url
+    );
+    let mcp_path = std::env::temp_dir().join("guilhem-mcp.json");
+    std::fs::write(&mcp_path, &mcp_config)?;
+
     let output = tokio::process::Command::new("claude")
-        .args(["--print", prompt])
+        .args([
+            "--print",
+            prompt,
+            "--mcp-config",
+            mcp_path.to_str().unwrap(),
+            "--allowed-tools",
+            "mcp__farga__search_signals,mcp__farga__read_context,mcp__farga__list_projects",
+        ])
         .env("FARGA_URL", &state.farga_url)
         .env("FARGA_PROJECT", &state.farga_project)
         .output()
