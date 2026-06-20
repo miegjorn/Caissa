@@ -9,8 +9,8 @@ spec:
   description: Occitan stack — all services and agents
 
   sourceRepos:
-    - "https://github.com/miegjorn/Caissa.git"
-    - "https://github.com/miegjorn/Fondament.git"
+    - "ssh://git@ssh.github.com:443/miegjorn/Caissa.git"
+    - "git@github.com:miegjorn/Fondament.git"
     - "https://charts.bitnami.com/bitnami"
     - "https://kubernetes.github.io/ingress-nginx"
 

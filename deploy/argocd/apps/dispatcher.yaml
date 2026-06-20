@@ -6,7 +6,7 @@ metadata:
 spec:
   project: occitan
   source:
-    repoURL: https://github.com/miegjorn/Caissa.git
+    repoURL: ssh://git@ssh.github.com:443/miegjorn/Caissa.git
     targetRevision: main
     path: deploy/charts/dispatcher
   destination:

@@ -19,7 +19,7 @@ spec:
   project: occitan
 
   source:
-    repoURL: https://github.com/miegjorn/Caissa.git
+    repoURL: ssh://git@ssh.github.com:443/miegjorn/Caissa.git
     targetRevision: HEAD
     path: deploy/argocd/apps
 
