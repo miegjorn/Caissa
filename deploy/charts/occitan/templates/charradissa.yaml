@@ -47,6 +47,11 @@ spec:
       labels:
         {{- include "occitan.selectorLabels" (dict "component" "charradissa" "context" .) | nindent 8 }}
     spec:
+      # The daemon reads CHARRADISSA_PORT for its listen port, which collides with
+      # the kubelet's legacy service-link env var (<SVCNAME>_PORT=tcp://ip:port).
+      # Disable service links so the daemon's "8448" default applies. (Code fix:
+      # rename the env var to a non-colliding name — tracked for the daemon rebuild.)
+      enableServiceLinks: false
       containers:
         - name: charradissa
           image: {{ .Values.charradissa.image }}
