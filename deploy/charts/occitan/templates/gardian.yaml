@@ -19,6 +19,7 @@ spec:
       containers:
         - name: gardian
           image: {{ .Values.gardian.image }}
+          imagePullPolicy: Never
           command: ["gardian-server"]
           ports:
             - containerPort: {{ .Values.gardian.port }}

@@ -71,19 +71,18 @@ synapse:
   reportStats: false
 
 # ─── PostgreSQL (Synapse database) ───────────────────────────────────────────
-# Uses bitnami/postgresql subchart.
+# In-chart StatefulSet using the official postgres image (templates/postgresql.yaml).
 postgresql:
   enabled: true
+  image: postgres:15-alpine
   auth:
     username: synapse
     password: synapse   # override via --set or sealed secrets in production
     database: synapse
-  primary:
-    persistence:
-      size: 8Gi
-    initdb:
-      # Required by Synapse
-      args: "--encoding=UTF8 --lc-collate=C --lc-ctype=C"
+  persistence:
+    size: 8Gi
+  # Required by Synapse — C collation/ctype at initdb time.
+  initdbArgs: "--encoding=UTF8 --lc-collate=C --lc-ctype=C"
 
 # ─── Element Web (Matrix client) ─────────────────────────────────────────────
 element:

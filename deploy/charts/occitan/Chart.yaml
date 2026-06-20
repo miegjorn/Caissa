@@ -4,10 +4,5 @@ description: Occitan stack — Gardian, Farga, Amassada, Charradissa, Synapse, E
 type: application
 version: 0.1.0
 appVersion: "phase-II"
-
-dependencies:
-  - name: postgresql
-    version: "16.x.x"
-    repository: https://charts.bitnami.com/bitnami
-    alias: postgresql
-    condition: postgresql.enabled
+# PostgreSQL is an in-chart StatefulSet (templates/postgresql.yaml) using the official
+# postgres image — the bitnami subchart images are no longer pullable from Docker Hub.

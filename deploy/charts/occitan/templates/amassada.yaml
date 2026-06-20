@@ -19,6 +19,7 @@ spec:
       containers:
         - name: amassada
           image: {{ .Values.amassada.image }}
+          imagePullPolicy: Never
           command: ["amassada-server"]
           ports:
             - containerPort: {{ .Values.amassada.port }}

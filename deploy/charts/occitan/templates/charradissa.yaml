@@ -49,6 +49,7 @@ spec:
       containers:
         - name: charradissa
           image: {{ .Values.charradissa.image }}
+          imagePullPolicy: Never
           command: ["charradissa-daemon"]
           ports:
             - containerPort: {{ .Values.charradissa.port }}

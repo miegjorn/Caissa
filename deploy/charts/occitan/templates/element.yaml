@@ -46,6 +46,9 @@ spec:
       containers:
         - name: element
           image: {{ .Values.element.image }}
+          # nginx in the image binds privileged port 80; run as root for local dev.
+          securityContext:
+            runAsUser: 0
           ports:
             - containerPort: {{ .Values.element.port }}
           volumeMounts:

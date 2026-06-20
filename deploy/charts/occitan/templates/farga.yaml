@@ -37,6 +37,7 @@ spec:
         # The image contains docs/ at /app/docs; copy to the PVC only if empty.
         - name: seed-docs
           image: {{ .Values.farga.image }}
+          imagePullPolicy: Never
           command:
             - sh
             - -c
@@ -54,6 +55,7 @@ spec:
       containers:
         - name: farga
           image: {{ .Values.farga.image }}
+          imagePullPolicy: Never
           command: ["farga-server"]
           ports:
             - containerPort: {{ .Values.farga.port }}
