@@ -140,6 +140,7 @@ spec:
       labels:
         {{- include "occitan.selectorLabels" (dict "component" "openbao" "context" .) | nindent 8 }}
     spec:
+      # No special SA needed — init/unseal is self-contained (keys on PVC, not k8s API).
       containers:
         - name: openbao
           image: {{ .Values.openbao.image }}
