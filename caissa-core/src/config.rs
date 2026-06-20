@@ -27,6 +27,11 @@ pub struct CaissaConfig {
     /// Dispatcher MCP endpoint injected into the agent container at spawn time.
     #[serde(default = "default_dispatcher_mcp_url")]
     pub dispatcher_mcp_url: String,
+    /// Model used for non-interactive chronicle runs (`caissa listen`).
+    /// Defaults to Haiku — fast, cheap, right for routine observation.
+    /// Override per-deployment: chronicle_model = "claude-sonnet-4-6"
+    #[serde(default = "default_chronicle_model")]
+    pub chronicle_model: String,
 }
 
 fn default_fondament_path() -> String {
@@ -45,6 +50,10 @@ fn default_dispatcher_mcp_url() -> String {
     "http://dispatcher.agents.svc.cluster.local:9090/mcp".into()
 }
 
+fn default_chronicle_model() -> String {
+    "claude-haiku-4-5-20251001".into()
+}
+
 impl Default for CaissaConfig {
     fn default() -> Self {
         Self {
@@ -57,6 +66,7 @@ impl Default for CaissaConfig {
             generation: default_generation(),
             farga_mcp_url: default_farga_mcp_url(),
             dispatcher_mcp_url: default_dispatcher_mcp_url(),
+            chronicle_model: default_chronicle_model(),
         }
     }
 }
@@ -98,17 +108,23 @@ pub fn load_config() -> anyhow::Result<CaissaConfig> {
         dirs_config_path(),
     ];
 
+    let mut config = CaissaConfig::default();
     for path in &candidates {
         if path.exists() {
             let text = std::fs::read_to_string(path)
                 .map_err(|e| anyhow::anyhow!("reading {}: {}", path.display(), e))?;
             let file: ConfigFile = toml::from_str(&text)
                 .map_err(|e| anyhow::anyhow!("parsing {}: {}", path.display(), e))?;
-            return Ok(file.caissa);
+            config = file.caissa;
+            break;
         }
     }
-
-    Ok(CaissaConfig::default())
+    // Env overrides — useful for k8s deployments where the toml is a ConfigMap
+    // but per-pod values (farga project, model) come from env.
+    if let Ok(v) = std::env::var("FARGA_URL")          { config.farga_url = v; }
+    if let Ok(v) = std::env::var("FARGA_PROJECT")      { config.project = v; }
+    if let Ok(v) = std::env::var("CHRONICLE_MODEL")    { config.chronicle_model = v; }
+    Ok(config)
 }
 
 fn dirs_config_path() -> PathBuf {

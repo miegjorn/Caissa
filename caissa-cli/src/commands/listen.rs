@@ -17,6 +17,7 @@ struct ListenState {
     farga_url: String,
     farga_project: String,
     farga_mcp_url: String,
+    chronicle_model: String,
 }
 
 #[derive(Deserialize)]
@@ -48,6 +49,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         farga_url: config.farga_url,
         farga_project: config.project,
         farga_mcp_url: config.farga_mcp_url,
+        chronicle_model: config.chronicle_model,
     });
 
     let app = Router::new()
@@ -121,6 +123,8 @@ async fn run_chronicle(state: &ListenState, prompt: &str) -> anyhow::Result<()> 
         .args([
             "--print",
             prompt,
+            "--model",
+            &state.chronicle_model,
             "--mcp-config",
             mcp_path.to_str().unwrap(),
             "--allowed-tools",

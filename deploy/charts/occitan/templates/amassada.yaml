@@ -36,8 +36,8 @@ spec:
             - name: FARGA_URL
               value: "http://farga:{{ .Values.farga.port }}"
           readinessProbe:
-            # No /health route yet; TCP check confirms the listener is up.
-            tcpSocket:
+            httpGet:
+              path: /health
               port: {{ .Values.amassada.port }}
             initialDelaySeconds: 5
             periodSeconds: 10

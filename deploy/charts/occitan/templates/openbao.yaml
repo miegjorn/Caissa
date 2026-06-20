@@ -1,8 +1,15 @@
 {{- if .Values.openbao.enabled }}
 # OpenBao (MPL-2.0 fork of Vault) — the secret backend Gardian fronts.
-# DEV MODE: in-memory storage, auto-unsealed, fixed root token from the 'openbao' secret.
-# Data does NOT survive a pod restart — re-seed after a restart. Persistent file-storage +
-# auto-unseal is the hardening follow-up.
+# FILE STORAGE: data persists across pod restarts on a PVC.
+#
+# Unseal flow:
+#   First run  — entrypoint detects uninitialised, calls `bao operator init`, patches
+#                the 'openbao' k8s Secret with the generated unseal-key + root token,
+#                then unseals. No manual step required.
+#   Later runs — entrypoint reads BAO_UNSEAL_KEY from the patched secret and unseals.
+#
+# Security note: unseal key in a k8s Secret is appropriate for a local kind cluster.
+# For production, replace with auto-unseal via a KMS/HSM transit key.
 apiVersion: v1
 kind: Service
 metadata:
@@ -18,6 +25,102 @@ spec:
       targetPort: 8200
       name: http
 ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: openbao-data
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.openbao.storage }}
+---
+# ConfigMap holds both the HCL server config and the entrypoint wrapper script.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openbao-config
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+data:
+  config.hcl: |
+    ui            = false
+    disable_mlock = true
+
+    storage "file" {
+      path = "/bao/data"
+    }
+
+    listener "tcp" {
+      address     = "0.0.0.0:8200"
+      tls_disable = true
+    }
+
+    api_addr = "http://openbao:8200"
+
+  entrypoint.sh: |
+    #!/bin/sh
+    set -e
+    export BAO_ADDR=http://127.0.0.1:8200
+
+    # Start the server in the background; we'll foreground it at the end.
+    bao server -config=/bao-config/config.hcl &
+    BAO_PID=$!
+
+    echo "[openbao] waiting for server to respond..."
+    until bao status >/dev/null 2>&1; do sleep 0.5; done
+
+    INITIALIZED=$(bao status -format=json 2>/dev/null \
+      | python3 -c "import sys,json; print(json.load(sys.stdin)['initialized'])" 2>/dev/null \
+      || echo "False")
+
+    if [ "$INITIALIZED" = "False" ]; then
+      echo "[openbao] first run — initialising..."
+      INIT=$(bao operator init -key-shares=1 -key-threshold=1 -format=json)
+      UNSEAL=$(echo "$INIT" | python3 -c \
+        "import sys,json; d=json.load(sys.stdin); print(d['unseal_keys_b64'][0])")
+      ROOT=$(echo "$INIT" | python3 -c \
+        "import sys,json; print(json.load(sys.stdin)['root_token'])")
+
+      # Patch the 'openbao' k8s Secret with the generated credentials.
+      SA_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+      PATCH=$(python3 -c "
+    import base64, json, sys
+    unseal = sys.argv[1]; root = sys.argv[2]
+    print(json.dumps({'data': {
+        'unseal-key': base64.b64encode(unseal.encode()).decode(),
+        'token':      base64.b64encode(root.encode()).decode(),
+    }}))
+    " "$UNSEAL" "$ROOT")
+
+      curl -sf -X PATCH \
+        -H "Content-Type: application/merge-patch+json" \
+        -H "Authorization: Bearer $SA_TOKEN" \
+        --cacert /var/run/secrets/kubernetes.io/serviceaccount/ca.crt \
+        "https://kubernetes.default.svc/api/v1/namespaces/occitan-system/secrets/openbao" \
+        -d "$PATCH" > /dev/null && echo "[openbao] secret patched with unseal-key + token"
+
+      bao operator unseal "$UNSEAL" > /dev/null
+      echo "[openbao] init + unseal complete"
+    else
+      echo "[openbao] unsealing with stored key..."
+      # BAO_UNSEAL_KEY is injected from the 'openbao' secret (optional — empty on first run).
+      if [ -z "${BAO_UNSEAL_KEY:-}" ]; then
+        echo "[openbao] ERROR: BAO_UNSEAL_KEY is not set but server is already initialised." >&2
+        echo "[openbao] Delete the openbao-data PVC to reset, or restore the unseal key." >&2
+        kill $BAO_PID; exit 1
+      fi
+      bao operator unseal "$BAO_UNSEAL_KEY" > /dev/null
+      echo "[openbao] unsealed"
+    fi
+
+    # Foreground the server process.
+    wait $BAO_PID
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -28,6 +131,8 @@ metadata:
     {{- include "occitan.selectorLabels" (dict "component" "openbao" "context" .) | nindent 4 }}
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "occitan.selectorLabels" (dict "component" "openbao" "context" .) | nindent 6 }}
@@ -36,35 +141,88 @@ spec:
       labels:
         {{- include "occitan.selectorLabels" (dict "component" "openbao" "context" .) | nindent 8 }}
     spec:
+      serviceAccountName: openbao
       containers:
         - name: openbao
           image: {{ .Values.openbao.image }}
           imagePullPolicy: IfNotPresent
-          args: ["server", "-dev", "-dev-listen-address=0.0.0.0:8200"]
+          command: ["/bin/sh", "/bao-config/entrypoint.sh"]
           env:
-            - name: BAO_DEV_ROOT_TOKEN_ID
+            - name: BAO_ADDR
+              value: "http://127.0.0.1:8200"
+            # Populated after first-run init patches the secret. Optional so the pod
+            # can start on a fresh deployment where the key doesn't exist yet.
+            - name: BAO_UNSEAL_KEY
               valueFrom:
                 secretKeyRef:
                   name: openbao
-                  key: token
-            - name: BAO_DEV_LISTEN_ADDRESS
-              value: "0.0.0.0:8200"
-            - name: BAO_ADDR
-              value: "http://127.0.0.1:8200"
+                  key: unseal-key
+                  optional: true
           ports:
             - containerPort: 8200
               name: http
           readinessProbe:
             httpGet:
-              # 200 = unsealed+active (dev mode is always unsealed).
               path: /v1/sys/health
               port: 8200
-            initialDelaySeconds: 3
+            initialDelaySeconds: 5
             periodSeconds: 10
+            failureThreshold: 12
+          volumeMounts:
+            - name: data
+              mountPath: /bao/data
+            - name: config
+              mountPath: /bao-config
           resources:
             requests:
               cpu: 100m
               memory: 128Mi
             limits:
               memory: 256Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: openbao-data
+        - name: config
+          configMap:
+            name: openbao-config
+            defaultMode: 0755
+---
+# RBAC: entrypoint patches 'openbao' secret with generated unseal-key + root token.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openbao
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: openbao-secret-patcher
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["openbao"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openbao-secret-patcher
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: openbao
+    namespace: occitan-system
+roleRef:
+  kind: Role
+  name: openbao-secret-patcher
+  apiGroup: rbac.authorization.k8s.io
 {{- end }}

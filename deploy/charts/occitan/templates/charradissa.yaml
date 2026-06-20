@@ -80,8 +80,8 @@ spec:
             - name: config
               mountPath: /config
           readinessProbe:
-            # No /health route yet; TCP check confirms the listener is up.
-            tcpSocket:
+            httpGet:
+              path: /health
               port: {{ .Values.charradissa.port }}
             initialDelaySeconds: 10
             periodSeconds: 15

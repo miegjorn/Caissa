@@ -68,8 +68,8 @@ spec:
             - name: data
               mountPath: /data
           readinessProbe:
-            # No /health route yet; TCP check confirms the listener is up.
-            tcpSocket:
+            httpGet:
+              path: /health
               port: {{ .Values.farga.port }}
             initialDelaySeconds: 5
             periodSeconds: 10

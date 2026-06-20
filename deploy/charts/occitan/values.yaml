@@ -21,6 +21,7 @@ gardian:
 openbao:
   enabled: true
   image: openbao/openbao:latest
+  storage: 1Gi
 
 # ─── Farga ───────────────────────────────────────────────────────────────────
 farga:
