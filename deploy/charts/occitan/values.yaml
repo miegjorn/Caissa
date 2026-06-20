@@ -56,7 +56,7 @@ charradissa:
   # 'charradissa' secret with key as-token). Enable once the registration file
   # and matching token are provisioned. See TODO in deploy notes.
   appservice:
-    enabled: false
+    enabled: true
   config:
     org:
       name: occitan
