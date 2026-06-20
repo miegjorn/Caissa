@@ -177,25 +177,61 @@ When you rebuild a service, re-`kind load` it and restart its Deployment
 
 ## Step 4 — Configure secrets
 
-Create the secrets ArgoCD/Helm cannot manage:
+There are two layers: a couple of **bootstrap k8s secrets** (which OpenBao itself and the
+pods that inject env need), and the **application secrets in OpenBao** (the real source of
+truth that Gardian fronts).
+
+### 4a. Bootstrap k8s secrets
 
 ```bash
 kubectl create namespace occitan-system
 kubectl create namespace agents
 
-# Anthropic API key (used by Amassada + Charradissa)
-kubectl create secret generic anthropic \
-  --namespace occitan-system \
-  --from-literal=api-key="${ANTHROPIC_API_KEY}"
+# Anthropic API key — consumed directly via env by Amassada/Charradissa/Guilhem.
+# (Also seeded into OpenBao below; this env copy is the bootstrap until everything
+# resolves through Gardian.)
+for ns in occitan-system agents; do
+  kubectl create secret generic anthropic -n "$ns" \
+    --from-literal=api-key="${ANTHROPIC_API_KEY}"
+done
 
-# Matrix appservice token — ONLY needed when you enable the charradissa appservice.
-# It is gated off by default (charradissa.appservice.enabled: false in values.yaml),
-# so Synapse comes up without it and charradissa stays at 0 replicas. Skip this until
-# you provision the registration (see "Matrix appservice" below).
-# kubectl create secret generic charradissa \
-#   --namespace occitan-system \
-#   --from-literal=as-token="${MATRIX_AS_TOKEN}"
+# OpenBao dev-mode root token. OpenBao reads it as BAO_DEV_ROOT_TOKEN_ID; Gardian reads
+# it as BAO_TOKEN; the Guilhem token-injection initContainer reads it too (agents ns).
+TOKEN="occitan-dev-$(openssl rand -hex 8)"
+for ns in occitan-system agents; do
+  kubectl create secret generic openbao -n "$ns" --from-literal=token="$TOKEN"
+done
 ```
+
+OpenBao deploys automatically as part of the occitan chart (`templates/openbao.yaml`,
+dev-mode, KV v2 at `secret/`). **Dev mode is in-memory** — secrets do not survive an OpenBao
+pod restart, so re-seed (Step 4b) if it restarts. Persistent file-storage + auto-unseal is a
+planned hardening step.
+
+### 4b. Seed application secrets into OpenBao
+
+Use `scripts/seed-secret.sh` — it pipes the value over stdin (never argv) and can restart the
+consumers so their initContainers re-pull:
+
+```bash
+echo -n "$ANTHROPIC_API_KEY"  | scripts/seed-secret.sh occitan/anthropic
+echo -n "$GITHUB_TOKEN"       | scripts/seed-secret.sh occitan/github
+echo -n "$GITLAB_TOKEN"       | scripts/seed-secret.sh occitan/gitlab --restart agents/guilhem
+```
+
+Gardian fronts these: with `BAO_ADDR=http://openbao:8200` set (it is, in values.yaml),
+`gardian-server` selects its `OpenBaoBackend` and resolves e.g. `occitan/anthropic` →
+`secret/occitan/anthropic` field `value`. Verify:
+
+```bash
+GPOD=$(kubectl get pod -n occitan-system -l app.kubernetes.io/name=gardian -o name | head -1)
+kubectl exec -n occitan-system "$GPOD" -- sh -c \
+  'curl -s -H "X-Vault-Token: $BAO_TOKEN" http://openbao:8200/v1/secret/data/occitan/anthropic' \
+  | python3 -c "import sys,json;print('len', len(json.load(sys.stdin)['data']['data']['value']))"
+```
+
+> **Matrix appservice token** is separate and only needed when you enable the charradissa
+> appservice (`charradissa.appservice.enabled`, off by default). See "Matrix appservice" below.
 
 ---
 
@@ -312,7 +348,33 @@ curl -X POST http://localhost:8080/trigger/chronicle \
   -d '{"reason":"manual test"}'
 ```
 
+The listener returns `202` immediately and runs Claude in the background; watch
+`kubectl logs -n agents deployment/guilhem` for `chronicle run complete`. The output is
+posted to Farga as a signal — confirm with
+`curl http://farga.occitan-system.svc.cluster.local:7500/signals/recent?project=occitan`.
 The scheduled CronWorkflow fires every 6 hours automatically.
+
+> The chronicle prompt asks Claude to read/write Farga directly, but in a headless
+> `claude --print` run its shell tools are gated. The reliable path today is that `caissa`
+> posts Claude's output to Farga for it. Attaching the Farga MCP (`farga_mcp_url`) to the
+> chronicle run is the planned fix to give Claude a grounded read of the stack.
+
+### Guilhem's GitHub / GitLab access
+
+The agent image ships `git`, `gh`, and `glab`. The Guilhem pod's initContainer pulls the
+`occitan/github` and `occitan/gitlab` tokens from OpenBao into an in-memory `/creds` volume
+(`tokens.env` + `.git-credentials` + `.gitconfig`); the listener sources them so Guilhem and
+its `claude` subprocess can clone/push and use the CLIs. Verify:
+
+```bash
+GP=$(kubectl get pod -n agents -l app.kubernetes.io/name=guilhem -o name | head -1)
+kubectl exec -n agents "$GP" -- sh -lc '. /creds/tokens.env; gh api user --jq .login'
+kubectl exec -n agents "$GP" -- sh -lc '. /creds/tokens.env; glab api user | python3 -c "import sys,json;print(json.load(sys.stdin)[\"username\"])"'
+```
+
+> GitLab needs a token with `read_repository`/`read_user` (a classic PAT, or a fine-grained
+> one with those scopes) — a narrowly-scoped token returns `403 insufficient_granular_scope`.
+> To rotate a token: `echo -n "$NEW" | scripts/seed-secret.sh occitan/gitlab --restart agents/guilhem`.
 
 ---
 
