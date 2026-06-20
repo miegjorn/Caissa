@@ -41,13 +41,13 @@ farga:
 # Canvases are baked into the image at /canvases/stdlib.
 amassada:
   image: ghcr.io/miegjorn/amassada
-  imageTag: sha-b1df616 # CI writes sha-<sha> here on every main push
+  imageTag: sha-c731264 # CI writes sha-<sha> here on every main push
   replicas: 1
   port: 7700
   env:
     AMASSADA_PORT: "7700"
     AMASSADA_CANVAS_DIR: /canvases/stdlib
-  # ANTHROPIC_API_KEY is injected from the 'anthropic' secret (key: api-key).
+    # ANTHROPIC_API_KEY is injected from the 'anthropic' secret (key: api-key).
 # ─── Charradissa ─────────────────────────────────────────────────────────────
 charradissa:
   image: ghcr.io/miegjorn/charradissa
@@ -79,7 +79,7 @@ charradissa:
       type: none
     projects:
       autodiscover: false
-  # ANTHROPIC_API_KEY from 'anthropic' secret; MATRIX_AS_TOKEN from 'charradissa' secret.
+      # ANTHROPIC_API_KEY from 'anthropic' secret; MATRIX_AS_TOKEN from 'charradissa' secret.
 # ─── Synapse (Matrix homeserver) ─────────────────────────────────────────────
 synapse:
   image: matrixdotorg/synapse:latest
