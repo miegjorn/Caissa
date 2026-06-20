@@ -144,8 +144,33 @@ if [ -n "${ARGOCD_PASSWORD}" ]; then
 
   blue "Registering GitHub repo with ArgoCD..."
   yellow "If Caissa is a private GitHub repo, provide credentials:"
-  yellow "  argocd repo add https://github.com/bedardpl/Caissa.git --username <user> --password <token>"
-  yellow "  or: argocd repo add git@github.com:bedardpl/Caissa.git --ssh-private-key-path ~/.ssh/id_ed25519"
+  yellow "  argocd repo add https://github.com/occitan/Caissa.git --username <user> --password <token>"
+  yellow "  or: argocd repo add git@github.com:occitan/Caissa.git --ssh-private-key-path ~/.ssh/id_ed25519"
+fi
+
+# ─── ghcr.io pull secret ─────────────────────────────────────────────────────
+# Required for pods to pull private ghcr.io/occitan/* images.
+# Create a GitHub PAT with read:packages scope and set GHCR_PAT before running.
+if [ -n "${GHCR_PAT:-}" ]; then
+  blue "Creating ghcr-creds imagePullSecret in occitan-system and agents namespaces..."
+  for ns in occitan-system agents; do
+    kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
+    kubectl create secret docker-registry ghcr-creds \
+      --namespace "$ns" \
+      --docker-server=ghcr.io \
+      --docker-username="${GITHUB_USER:-bedardpl}" \
+      --docker-password="${GHCR_PAT}" \
+      --dry-run=client -o yaml | kubectl apply -f -
+  done
+  green "ghcr-creds secret created"
+else
+  yellow "GHCR_PAT not set — skipping ghcr-creds secret."
+  yellow "Create it manually before ArgoCD syncs:"
+  yellow "  export GHCR_PAT=<token-with-read:packages>  GITHUB_USER=bedardpl"
+  yellow "  kubectl create secret docker-registry ghcr-creds -n occitan-system \\"
+  yellow "    --docker-server=ghcr.io --docker-username=\$GITHUB_USER --docker-password=\$GHCR_PAT"
+  yellow "  kubectl create secret docker-registry ghcr-creds -n agents \\"
+  yellow "    --docker-server=ghcr.io --docker-username=\$GITHUB_USER --docker-password=\$GHCR_PAT"
 fi
 
 # ─── ArgoCD: bootstrap project + root app ────────────────────────────────────
@@ -160,4 +185,4 @@ echo "ArgoCD initial admin password: ${ARGOCD_PASSWORD:-run: kubectl -n argocd g
 echo "ArgoCD UI:  https://localhost:8080  (after: kubectl port-forward svc/argocd-server -n argocd 8080:443)"
 echo ""
 green "Bootstrap complete. Occitan cluster '${CLUSTER_NAME}' is ready."
-echo "Guilhem will be live once ArgoCD syncs and 'caissa build guilhem' image is available."
+echo "Guilhem will be live once ArgoCD syncs the first CI-built image from ghcr.io/occitan/."

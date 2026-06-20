@@ -95,10 +95,14 @@ spec:
           volumeMounts:
             - name: creds
               mountPath: /creds
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: guilhem
           image: {{ .Values.image }}
-          imagePullPolicy: Never
+          imagePullPolicy: Always
           # Webhook listener — accepts POST /trigger/chronicle from Argo Workflows.
           # Wrapper sources the OpenBao-provided tokens and points git at the shared
           # gitconfig, then exec's the listener so claude inherits the credentials.

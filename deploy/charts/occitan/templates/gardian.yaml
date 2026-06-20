@@ -16,10 +16,14 @@ spec:
       labels:
         {{- include "occitan.selectorLabels" (dict "component" "gardian" "context" .) | nindent 8 }}
     spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: gardian
-          image: {{ .Values.gardian.image }}
-          imagePullPolicy: Never
+          image: {{ .Values.gardian.image }}:{{ .Values.gardian.imageTag }}
+          imagePullPolicy: Always
           command: ["gardian-server"]
           ports:
             - containerPort: {{ .Values.gardian.port }}

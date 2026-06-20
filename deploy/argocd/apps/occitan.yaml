@@ -11,7 +11,7 @@ spec:
   project: occitan
 
   source:
-    repoURL: https://github.com/bedardpl/Caissa.git
+    repoURL: https://github.com/occitan/Caissa.git
     targetRevision: HEAD
     path: deploy/charts/occitan
     helm:

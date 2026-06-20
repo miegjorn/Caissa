@@ -1,9 +1,15 @@
 # Occitan stack — Helm values
 # Override per environment: helm upgrade occitan ./charts/occitan -f values.prod.yaml
 
+# imagePullSecrets for ghcr.io private packages.
+# Create the secret with: scripts/bootstrap.sh (or manually — see docs/install.md).
+imagePullSecrets:
+  - name: ghcr-creds
+
 # ─── Gardian ─────────────────────────────────────────────────────────────────
 gardian:
-  image: ghcr.io/occitan/gardian:latest
+  image: ghcr.io/occitan/gardian
+  imageTag: latest   # CI writes sha-<sha> here on every main push
   replicas: 1
   # gardian-server currently hardcodes 0.0.0.0:7400 and ignores GARDIAN_PORT.
   # TODO(gardian): make gardian-server honour GARDIAN_PORT, then this can move.
@@ -25,7 +31,8 @@ openbao:
 
 # ─── Farga ───────────────────────────────────────────────────────────────────
 farga:
-  image: ghcr.io/occitan/farga:latest
+  image: ghcr.io/occitan/farga
+  imageTag: latest   # CI writes sha-<sha> here on every main push
   replicas: 1
   port: 7500
   storage: 5Gi
@@ -37,7 +44,8 @@ farga:
 # ─── Amassada ────────────────────────────────────────────────────────────────
 # Canvases are baked into the image at /canvases/stdlib.
 amassada:
-  image: ghcr.io/occitan/amassada:latest
+  image: ghcr.io/occitan/amassada
+  imageTag: latest   # CI writes sha-<sha> here on every main push
   replicas: 1
   port: 7700
   env:
@@ -47,7 +55,8 @@ amassada:
 
 # ─── Charradissa ─────────────────────────────────────────────────────────────
 charradissa:
-  image: ghcr.io/occitan/charradissa:latest
+  image: ghcr.io/occitan/charradissa
+  imageTag: latest   # CI writes sha-<sha> here on every main push
   replicas: 1
   port: 8448
   env:

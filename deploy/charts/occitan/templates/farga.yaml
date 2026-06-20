@@ -32,12 +32,16 @@ spec:
       labels:
         {{- include "occitan.selectorLabels" (dict "component" "farga" "context" .) | nindent 8 }}
     spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       initContainers:
         # Seed the docs directory from the image on first run.
         # The image contains docs/ at /app/docs; copy to the PVC only if empty.
         - name: seed-docs
-          image: {{ .Values.farga.image }}
-          imagePullPolicy: Never
+          image: {{ .Values.farga.image }}:{{ .Values.farga.imageTag }}
+          imagePullPolicy: Always
           command:
             - sh
             - -c
@@ -54,8 +58,8 @@ spec:
               mountPath: /data
       containers:
         - name: farga
-          image: {{ .Values.farga.image }}
-          imagePullPolicy: Never
+          image: {{ .Values.farga.image }}:{{ .Values.farga.imageTag }}
+          imagePullPolicy: Always
           command: ["farga-server"]
           ports:
             - containerPort: {{ .Values.farga.port }}

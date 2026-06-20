@@ -5,7 +5,7 @@
 #   argo submit deploy/workflows/ci-pipeline.yaml \
 #     -n argo \
 #     -p service=farga \
-#     -p registry=ghcr.io/bedardpl
+#     -p registry=ghcr.io/occitan
 
 apiVersion: argoproj.io/v1alpha1
 kind: Workflow
@@ -19,7 +19,7 @@ spec:
       - name: service
         value: farga         # gardian | farga | amassada | charradissa
       - name: registry
-        value: ghcr.io/bedardpl
+        value: ghcr.io/occitan
       - name: revision
         value: main
 
@@ -33,7 +33,7 @@ spec:
             arguments:
               parameters:
                 - name: repo
-                  value: "https://github.com/bedardpl/{{workflow.parameters.service}}.git"
+                  value: "https://github.com/occitan/{{workflow.parameters.service}}.git"
                 - name: service
                   value: "{{workflow.parameters.service}}"
                 - name: registry
@@ -68,7 +68,7 @@ spec:
       - name: generation
         value: guilhem
       - name: registry
-        value: ghcr.io/bedardpl
+        value: ghcr.io/occitan
 
   templates:
     - name: build-agent

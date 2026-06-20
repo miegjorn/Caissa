@@ -18,7 +18,7 @@ spec:
         parameters:
           - name: repo            # e.g. "https://github.com/bedardpl/Farga.git"
           - name: service         # e.g. "farga"
-          - name: registry        # e.g. "ghcr.io/bedardpl"
+          - name: registry        # e.g. "ghcr.io/occitan"
           - name: git-revision
             default: "main"
       volumes:
@@ -89,7 +89,7 @@ spec:
       inputs:
         parameters:
           - name: generation      # e.g. "guilhem"
-          - name: registry        # e.g. "ghcr.io/bedardpl"
+          - name: registry        # e.g. "ghcr.io/occitan"
           - name: caissa-revision
             default: "main"
           - name: fondament-revision
@@ -109,7 +109,7 @@ spec:
             arguments:
               parameters:
                 - name: repo
-                  value: "https://github.com/bedardpl/Caissa.git"
+                  value: "https://github.com/occitan/Caissa.git"
                 - name: revision
                   value: "{{inputs.parameters.caissa-revision}}"
                 - name: dest
@@ -119,7 +119,7 @@ spec:
             arguments:
               parameters:
                 - name: repo
-                  value: "https://github.com/bedardpl/Fondament.git"
+                  value: "https://github.com/occitan/Fondament.git"
                 - name: revision
                   value: "{{inputs.parameters.fondament-revision}}"
                 - name: dest
