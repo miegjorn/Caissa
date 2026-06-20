@@ -149,28 +149,16 @@ if [ -n "${ARGOCD_PASSWORD}" ]; then
 fi
 
 # ─── ghcr.io pull secret ─────────────────────────────────────────────────────
-# Required for pods to pull private ghcr.io/miegjorn/* images.
-# Create a GitHub PAT with read:packages scope and set GHCR_PAT before running.
+# Pods pull private ghcr.io/miegjorn/* images — they need ghcr-creds before ArgoCD syncs.
+# Authoritative source is OpenBao (secret/occitan/ghcr); this is the cold-start path.
+# After OpenBao is live, use: scripts/refresh-ghcr-creds.sh (reads from OpenBao).
 if [ -n "${GHCR_PAT:-}" ]; then
-  blue "Creating ghcr-creds imagePullSecret in occitan-system and agents namespaces..."
-  for ns in occitan-system agents; do
-    kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
-    kubectl create secret docker-registry ghcr-creds \
-      --namespace "$ns" \
-      --docker-server=ghcr.io \
-      --docker-username="${GITHUB_USER:-bedardpl}" \
-      --docker-password="${GHCR_PAT}" \
-      --dry-run=client -o yaml | kubectl apply -f -
-  done
-  green "ghcr-creds secret created"
+  blue "Creating ghcr-creds from env (cold-start)..."
+  GHCR_PAT="${GHCR_PAT}" bash scripts/refresh-ghcr-creds.sh --from-env
 else
-  yellow "GHCR_PAT not set — skipping ghcr-creds secret."
-  yellow "Create it manually before ArgoCD syncs:"
-  yellow "  export GHCR_PAT=<token-with-read:packages>  GITHUB_USER=bedardpl"
-  yellow "  kubectl create secret docker-registry ghcr-creds -n occitan-system \\"
-  yellow "    --docker-server=ghcr.io --docker-username=\$GITHUB_USER --docker-password=\$GHCR_PAT"
-  yellow "  kubectl create secret docker-registry ghcr-creds -n agents \\"
-  yellow "    --docker-server=ghcr.io --docker-username=\$GITHUB_USER --docker-password=\$GHCR_PAT"
+  yellow "GHCR_PAT not set — skipping ghcr-creds. Private image pods will ImagePullBackoff"
+  yellow "until you run: GHCR_PAT=<read:packages token> scripts/refresh-ghcr-creds.sh --from-env"
+  yellow "After OpenBao is live, store it there and use: scripts/refresh-ghcr-creds.sh"
 fi
 
 # ─── ArgoCD: bootstrap project + root app ────────────────────────────────────
