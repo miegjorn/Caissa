@@ -2,8 +2,8 @@
 # Image is built by: caissa build guilhem
 
 image: caissa-sandbox:guilhem
-# replicas: 0 until caissa listen is implemented
-replicas: 0
+# caissa listen is implemented — Guilhem is alive (event listener, ~0 idle cost).
+replicas: 1
 
 farga:
   url: "http://farga.occitan-system.svc.cluster.local:7500"
