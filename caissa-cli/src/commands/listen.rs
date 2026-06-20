@@ -220,10 +220,11 @@ async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::
             &state.matrix_model,
             "--mcp-config",
             mcp_path.to_str().unwrap(),
-            // Bash gives access to gh, glab, git, curl etc.
+            // Bash: gh, glab, git, curl etc.
+            // Edit/Write: allow Guilhem to update his own CLAUDE.md (persona reflection).
             // Farga MCP tools for structured memory reads.
             "--allowed-tools",
-            "Bash,mcp__farga__search_signals,mcp__farga__read_context,mcp__farga__list_projects",
+            "Bash,Edit,Write,mcp__farga__search_signals,mcp__farga__read_context,mcp__farga__list_projects",
         ])
         .env("FARGA_URL", &state.farga_url)
         .env("FARGA_PROJECT", &state.farga_project)

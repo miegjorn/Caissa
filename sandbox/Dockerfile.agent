@@ -45,6 +45,11 @@ COPY --from=caissabin /usr/local/bin/caissa /usr/local/bin/caissa
 # This is the identity layer — who the agent is, not what it knows right now.
 RUN mkdir -p /root/.claude
 COPY claude.md /root/.claude/CLAUDE.md
+# Allow Guilhem to update his own CLAUDE.md (auto-memory / persona reflection).
+# Without this, Claude Code's path guard blocks writes to ~/.claude/CLAUDE.md
+# even when Edit/Write are listed in --allowed-tools.
+RUN printf '{"permissions":{"allow":["Edit(/root/.claude/CLAUDE.md)","Write(/root/.claude/CLAUDE.md)","Edit(/workspace/**)","Write(/workspace/**)"]}}\n' \
+    > /root/.claude/settings.json
 
 # Entrypoint script: writes MCP config from env vars, then runs claude.
 # MCP servers (farga, dispatcher) are wired at runtime via FARGA_MCP_URL
