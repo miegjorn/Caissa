@@ -1,8 +1,9 @@
 /// Guilhem daemon — lightweight webhook listener.
 ///
 /// Runs an HTTP server that accepts chronicle trigger events from Argo Workflows,
-/// git webhooks, or Matrix. When triggered, it runs `claude --print "<task>"` as
+/// git webhooks, or cron. When triggered, it runs `claude --print "<task>"` as
 /// a subprocess (non-interactive) and posts the output as a Signal to Farga.
+/// (Matrix presence is Charradissa's appservice, not this listener.)
 ///
 /// Token usage is proportional to actual events — the server itself costs nothing.
 

@@ -9,10 +9,6 @@ farga:
   url: "http://farga.occitan-system.svc.cluster.local:7500"
   project: occitan
 
-matrix:
-  homeserver: "http://synapse.occitan-system.svc.cluster.local:8008"
-  serverName: occitane.guilhem
-
 # Chronicle schedule — how often Guilhem wakes to observe and record.
 # Uses Argo Workflows CronWorkflow syntax (standard cron).
 # Kept infrequent to avoid token burn on quiet periods.
