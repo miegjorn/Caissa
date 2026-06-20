@@ -44,6 +44,14 @@ for ns in "${NAMESPACES[@]}"; do
   echo "  ✓ $ns"
 done
 
+echo "=== enabling KV v2 secrets engine at secret/ (no-op if already enabled) ==="
+# In file-storage mode, no secrets engines are pre-mounted (unlike dev mode).
+# Read token from the secret we just patched.
+NEW_TOKEN=$(kubectl get secret openbao -n "$OB_NS" -o jsonpath='{.data.token}' | base64 -d)
+kubectl exec -n "$OB_NS" "$OBPOD" -- sh -c \
+  "BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN='$NEW_TOKEN' bao secrets enable -path=secret kv-v2 2>&1" \
+  | grep -v "path is already in use" | head -1 || true
+
 echo "=== restarting Gardian so it picks up the new BAO_TOKEN ==="
 kubectl rollout restart deploy/gardian -n occitan-system 2>&1 | tail -1
 echo "=== re-seed application secrets into OpenBao ==="
