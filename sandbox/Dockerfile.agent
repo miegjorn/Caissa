@@ -16,9 +16,23 @@ FROM caissa:latest AS caissabin
 # trixie (glibc 2.39) to match the caissa binary built on rust:1.90-slim/trixie.
 FROM node:20-trixie-slim
 
-# python3 needed by entrypoint.sh task mode (posts result to Farga REST)
-RUN apt-get update && apt-get install -y --no-install-recommends python3 \
-    && rm -rf /var/lib/apt/lists/*
+# python3 (entrypoint.sh task mode) + git/curl for repo access, and the gh + glab CLIs
+# so Guilhem can work against GitHub and GitLab. Tokens are injected at runtime from
+# OpenBao (see the guilhem chart initContainer).
+ARG GH_VER=2.95.0
+ARG GLAB_VER=1.103.0
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends python3 git curl ca-certificates; \
+    curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VER}/gh_${GH_VER}_linux_amd64.tar.gz" -o /tmp/gh.tgz; \
+    tar -xzf /tmp/gh.tgz -C /tmp; \
+    mv "$(find /tmp -type f -name gh -path '*/bin/*' | head -1)" /usr/local/bin/gh; \
+    curl -fsSL "https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VER}/downloads/glab_${GLAB_VER}_linux_amd64.tar.gz" -o /tmp/glab.tgz; \
+    tar -xzf /tmp/glab.tgz -C /tmp; \
+    mv "$(find /tmp -type f -name glab | head -1)" /usr/local/bin/glab; \
+    chmod +x /usr/local/bin/gh /usr/local/bin/glab; \
+    rm -rf /tmp/gh.tgz /tmp/glab.tgz /var/lib/apt/lists/*; \
+    git --version; gh --version; glab --version
 
 # Install Claude Code
 RUN npm install -g @anthropic-ai/claude-code
