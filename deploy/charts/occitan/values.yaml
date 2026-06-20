@@ -1,10 +1,6 @@
 # Occitan stack — Helm values
 # Override per environment: helm upgrade occitan ./charts/occitan -f values.prod.yaml
 
-# imagePullSecrets for ghcr.io private packages.
-# Create the secret with: scripts/bootstrap.sh (or manually — see docs/install.md).
-imagePullSecrets:
-  - name: ghcr-creds
 # ─── Gardian ─────────────────────────────────────────────────────────────────
 gardian:
   image: ghcr.io/miegjorn/gardian
