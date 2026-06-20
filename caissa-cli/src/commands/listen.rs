@@ -215,6 +215,19 @@ async fn handle_matrix_reply(
     }
 }
 
+/// Returns true only when the message explicitly needs live Farga state.
+/// Most conversational replies are grounded in the passed history + GitHub tools —
+/// skipping MCP saves the ~5-8s connection overhead on every casual message.
+fn needs_farga_mcp(content: &str) -> bool {
+    let lower = content.to_lowercase();
+    lower.contains("farga")
+        || lower.contains("read context")
+        || lower.contains("search signal")
+        || lower.contains("list project")
+        || lower.contains("look up")
+        || lower.contains("what's in")
+}
+
 async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::Result<String> {
     let mut prompt = format!("Matrix room: {}\n\nConversation history (oldest first):\n", req.room_id);
     for entry in &req.history {
@@ -225,38 +238,41 @@ async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::
         req.sender, req.content
     ));
 
-    // Farga MCP for memory access. Written per-call so concurrent requests
-    // don't race on the same file path.
-    let mcp_config = format!(
-        r#"{{"mcpServers":{{"farga":{{"type":"http","url":"{}"}}}}}}"#,
-        state.farga_mcp_url
-    );
-    let mcp_path = std::env::temp_dir().join(format!(
-        "guilhem-matrix-mcp-{}.json",
-        uuid::Uuid::new_v4()
-    ));
-    std::fs::write(&mcp_path, &mcp_config)?;
+    let mut cmd = tokio::process::Command::new("claude");
+    cmd.args(["--print", &prompt, "--model", &state.matrix_model])
+        .env("FARGA_URL", &state.farga_url)
+        .env("FARGA_PROJECT", &state.farga_project);
 
-    let output = tokio::process::Command::new("claude")
-        .args([
-            "--print",
-            &prompt,
-            "--model",
-            &state.matrix_model,
+    // Only pay the MCP connection cost when the message explicitly needs live Farga reads.
+    let mcp_path = if needs_farga_mcp(&req.content) {
+        let mcp_config = format!(
+            r#"{{"mcpServers":{{"farga":{{"type":"http","url":"{}"}}}}}}"#,
+            state.farga_mcp_url
+        );
+        let path = std::env::temp_dir().join(format!(
+            "guilhem-matrix-mcp-{}.json",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&path, &mcp_config)?;
+        tracing::debug!("matrix reply: attaching Farga MCP");
+        cmd.args([
             "--mcp-config",
-            mcp_path.to_str().unwrap(),
-            // Bash: gh, glab, git, curl etc.
-            // Edit/Write: allow Guilhem to update his own CLAUDE.md (persona reflection).
-            // Farga MCP tools for structured memory reads.
+            path.to_str().unwrap(),
             "--allowed-tools",
             "Bash,Edit,Write,mcp__farga__search_signals,mcp__farga__read_context,mcp__farga__list_projects",
-        ])
-        .env("FARGA_URL", &state.farga_url)
-        .env("FARGA_PROJECT", &state.farga_project)
-        .output()
-        .await?;
+        ]);
+        Some(path)
+    } else {
+        tracing::debug!("matrix reply: conversational path, no MCP");
+        cmd.args(["--allowed-tools", "Bash,Edit,Write"]);
+        None
+    };
 
-    let _ = std::fs::remove_file(&mcp_path);
+    let output = cmd.output().await?;
+
+    if let Some(path) = &mcp_path {
+        let _ = std::fs::remove_file(path);
+    }
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
