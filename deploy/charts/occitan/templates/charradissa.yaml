@@ -52,6 +52,10 @@ spec:
       # Disable service links so the daemon's "8448" default applies. (Code fix:
       # rename the env var to a non-colliding name — tracked for the daemon rebuild.)
       enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: charradissa
           image: {{ .Values.charradissa.image }}:{{ .Values.charradissa.imageTag }}

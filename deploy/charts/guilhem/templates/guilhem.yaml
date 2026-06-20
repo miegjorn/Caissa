@@ -51,6 +51,10 @@ spec:
         app.kubernetes.io/name: guilhem
         occitan/generation: guilhem
     spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       initContainers:
         # Pull the GitHub/GitLab tokens from OpenBao into a shared creds volume so
         # Guilhem (and its claude subprocess) can use git/gh/glab. OpenBao stays the

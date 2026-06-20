@@ -2,6 +2,8 @@
 # Image is built by: caissa build guilhem
 
 image: ghcr.io/miegjorn/caissa-sandbox:guilhem  # CI writes sha-tagged value here
+imagePullSecrets:
+  - name: ghcr-creds
 # caissa listen is implemented — Guilhem is alive (event listener, ~0 idle cost).
 replicas: 1
 

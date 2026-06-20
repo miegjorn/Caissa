@@ -16,6 +16,10 @@ spec:
       labels:
         {{- include "occitan.selectorLabels" (dict "component" "amassada" "context" .) | nindent 8 }}
     spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: amassada
           image: {{ .Values.amassada.image }}:{{ .Values.amassada.imageTag }}

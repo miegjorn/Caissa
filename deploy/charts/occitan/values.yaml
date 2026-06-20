@@ -1,6 +1,9 @@
 # Occitan stack — Helm values
 # Override per environment: helm upgrade occitan ./charts/occitan -f values.prod.yaml
 
+imagePullSecrets:
+  - name: ghcr-creds
+
 # ─── Gardian ─────────────────────────────────────────────────────────────────
 gardian:
   image: ghcr.io/miegjorn/gardian
