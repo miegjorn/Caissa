@@ -177,9 +177,9 @@ When you rebuild a service, re-`kind load` it and restart its Deployment
 
 ## Step 4 — Configure secrets
 
-There are two layers: a couple of **bootstrap k8s secrets** (which OpenBao itself and the
-pods that inject env need), and the **application secrets in OpenBao** (the real source of
-truth that Gardian fronts).
+There are three steps: **bootstrap k8s secrets** (4a, which OpenBao itself and the pods
+that inject env need), **initialising OpenBao** (4b, one-shot after fresh deploy), and
+**seeding application secrets** (4c, the real source of truth that Gardian fronts).
 
 ### 4a. Bootstrap k8s secrets
 
@@ -194,24 +194,30 @@ for ns in occitan-system agents; do
   kubectl create secret generic anthropic -n "$ns" \
     --from-literal=api-key="${ANTHROPIC_API_KEY}"
 done
-
-# OpenBao dev-mode root token. OpenBao reads it as BAO_DEV_ROOT_TOKEN_ID; Gardian reads
-# it as BAO_TOKEN; the Guilhem token-injection initContainer reads it too (agents ns).
-TOKEN="occitan-dev-$(openssl rand -hex 8)"
-for ns in occitan-system agents; do
-  kubectl create secret generic openbao -n "$ns" --from-literal=token="$TOKEN"
-done
 ```
 
 OpenBao deploys automatically as part of the occitan chart (`templates/openbao.yaml`,
-dev-mode, KV v2 at `secret/`). **Dev mode is in-memory** — secrets do not survive an OpenBao
-pod restart, so re-seed (Step 4b) if it restarts. Persistent file-storage + auto-unseal is a
-planned hardening step.
+file-storage backend, PVC-backed). On a fresh deploy it starts **sealed** — run the
+one-shot init script after the stack is up (Step 4b).
 
-### 4b. Seed application secrets into OpenBao
+### 4b. Initialise OpenBao (one-shot after fresh deploy)
 
-Use `scripts/seed-secret.sh` — it pipes the value over stdin (never argv) and can restart the
-consumers so their initContainers re-pull:
+`scripts/init-openbao.sh` reads the unseal key and root token from the OpenBao PVC,
+patches the `openbao` k8s secret in both `occitan-system` and `agents` namespaces,
+enables the KV v2 secrets engine, and restarts Gardian so it picks up the token:
+
+```bash
+bash scripts/init-openbao.sh
+```
+
+Run this once after every fresh cluster build. If OpenBao's pod restarts but the PVC
+survives, it will auto-unseal on the next pod start and the existing k8s secret remains
+valid — no need to re-run unless the PVC was wiped.
+
+### 4c. Seed application secrets into OpenBao
+
+`scripts/seed-secret.sh` reads the root token from the `openbao` k8s secret (no
+hard-coded token needed). Pipe the secret value over stdin:
 
 ```bash
 echo -n "$ANTHROPIC_API_KEY"  | scripts/seed-secret.sh occitan/anthropic
@@ -230,26 +236,25 @@ kubectl exec -n occitan-system "$GPOD" -- sh -c \
   | python3 -c "import sys,json;print('len', len(json.load(sys.stdin)['data']['data']['value']))"
 ```
 
-> **Matrix appservice token** is separate and only needed when you enable the charradissa
-> appservice (`charradissa.appservice.enabled`, off by default). See "Matrix appservice" below.
+**Re-seeding after a cluster rebuild**: run `init-openbao.sh` first (to repopulate the
+k8s secret), then `seed-secret.sh` for each secret.
 
 ---
 
 ## Step 5 — Verify the stack
 
-All six occitan-system services should report `1/1 Running` (charradissa is at 0 replicas
-until the appservice is wired):
+All six occitan-system services should report `1/1 Running`:
 
 ```bash
-kubectl get pods -n occitan-system   # gardian, farga, amassada, synapse, element, postgres
+kubectl get pods -n occitan-system   # gardian, farga, amassada, charradissa, synapse, element, postgres
 kubectl get pods -n agents           # dispatcher (+ guilhem once enabled)
 ```
 
-The Rust services don't expose `/health` yet, so readiness is a TCP check. Confirm a
-service is listening:
+The four Rust services (gardian, farga, amassada, charradissa) expose `GET /health`;
+readiness probes use `httpGet /health`. Confirm a service is up:
 ```bash
 kubectl port-forward svc/farga -n occitan-system 7500:7500 &
-nc -z localhost 7500 && echo "farga listening"
+curl -sf http://localhost:7500/health && echo "farga healthy"
 ```
 
 Check Matrix (this is the real end-to-end signal that Synapse + Postgres are healthy):
@@ -331,7 +336,8 @@ kubectl logs -n agents deployment/guilhem -f
 
 Guilhem's pod runs `caissa listen` — a lightweight HTTP server on port 8080. It accepts
 `POST /trigger/chronicle` and runs a non-interactive Claude Code session. Token cost is
-zero when idle.
+zero when idle. Chronicle runs use `claude-haiku-4-5-20251001` by default; override with
+the `chronicle_model` key in `caissa.toml` or the `CHRONICLE_MODEL` env var.
 
 Trigger a manual chronicle run:
 
@@ -396,35 +402,32 @@ The old generation (`occitane.guilhem`) stays running and reachable for historic
 
 ## Matrix appservice (charradissa)
 
-Charradissa joins Matrix as an **application service** (the orchestrator bot). This link is
-gated off by default so the rest of the stack can run without it. Wiring it up:
+Charradissa joins Matrix as an **application service** (the orchestrator bot). The
+appservice is fully wired: charradissa runs at `1/1`, the `@charradissa` and `@claude`
+users exist in Matrix, and the appservice registration lives in Synapse's `/data`
+directory.
 
-1. Generate a registration with an `as_token` / `hs_token` pair, e.g.:
-   ```yaml
-   # charradissa-registration.yaml
-   id: charradissa
-   url: http://charradissa:8448
-   as_token: <random>
-   hs_token: <random>
-   sender_localpart: charradissa
-   namespaces:
-     users:   [{ exclusive: true, regex: "@charradissa:.*" }]
-     aliases: []
-     rooms:   []
-   ```
-2. Create the matching secret (the value must equal `as_token` above):
-   ```bash
-   kubectl create secret generic charradissa -n occitan-system \
-     --from-literal=as-token="<random>"
-   ```
-3. Make the registration file available to Synapse at `/data/charradissa-registration.yaml`
-   (e.g. a ConfigMap mounted into the synapse pod).
-4. Set `charradissa.appservice.enabled: true` in `values.yaml`, commit, push. ArgoCD then
-   loads the registration in Synapse and scales charradissa to 1.
+The registration YAML format (for reference or re-provisioning):
 
-> Open decision: how the token is provisioned — a manually-created secret (as above, like
-> the `anthropic` secret) or issued through **Gardian** (the credential-chain component).
-> Until decided, leave the appservice disabled.
+```yaml
+# charradissa-registration.yaml
+id: charradissa
+url: http://charradissa:8448
+as_token: <random>
+hs_token: <random>
+sender_localpart: charradissa
+namespaces:
+  users:   [{ exclusive: true, regex: "@charradissa:.*" }]
+  aliases: []
+  rooms:   []
+```
+
+The `as_token` value must match the `charradissa` k8s secret (`as-token` key) in
+`occitan-system`. To rotate it:
+
+1. Update the k8s secret: `kubectl create secret generic charradissa -n occitan-system --from-literal=as-token="<new>" --dry-run=client -o yaml | kubectl apply -f -`
+2. Update the registration file in Synapse's `/data` and restart Synapse.
+3. Restart charradissa: `kubectl rollout restart deploy/charradissa -n occitan-system`
 
 ---
 
