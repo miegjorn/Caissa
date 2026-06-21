@@ -1,21 +1,18 @@
 # Guilhem agent chart values.
 # Image is built by: caissa build guilhem
 
-image: ghcr.io/miegjorn/caissa-sandbox:guilhem  # CI writes sha-tagged value here
+image: ghcr.io/miegjorn/caissa-sandbox:guilhem-sha-a053968 # CI writes sha-tagged value here
 imagePullSecrets:
   - name: ghcr-creds
 # caissa listen is implemented — Guilhem is alive (event listener, ~0 idle cost).
 replicas: 1
-
 farga:
   url: "http://farga.occitan-system.svc.cluster.local:7500"
   project: occitan
-
 # Chronicle schedule — how often Guilhem wakes to observe and record.
 # Uses Argo Workflows CronWorkflow syntax (standard cron).
 # Kept infrequent to avoid token burn on quiet periods.
-chronicleSchedule: "0 */6 * * *"   # every 6 hours
-
+chronicleSchedule: "0 */6 * * *" # every 6 hours
 resources:
   requests:
     cpu: 50m
