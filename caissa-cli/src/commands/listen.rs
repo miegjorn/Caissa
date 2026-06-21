@@ -80,6 +80,15 @@ impl SidecarProcess {
     fn kill(&mut self) {
         let _ = self.child.start_kill();
     }
+
+    /// Returns true if the child process is still running. `try_wait()`
+    /// returns `Ok(None)` while alive, `Ok(Some(_))` once it has exited, and
+    /// `Err` if the OS-level status check itself fails — in that case we
+    /// treat the process as dead (safer to respawn than keep using
+    /// something we can't verify).
+    fn is_alive(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -328,47 +337,39 @@ async fn handle_matrix_reply(
     }
 }
 
-/// Returns true only when the message explicitly needs live Farga state.
-/// Most conversational replies are grounded in the passed history + GitHub tools —
-/// skipping MCP saves the ~5-8s connection overhead on every casual message.
-fn needs_farga_mcp(content: &str) -> bool {
-    let lower = content.to_lowercase();
-    lower.contains("farga")
-        || lower.contains("read context")
-        || lower.contains("search signal")
-        || lower.contains("list project")
-        || lower.contains("look up")
-        || lower.contains("what's in")
-}
-
 async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::Result<String> {
-    let needs_tools = needs_farga_mcp(&req.content);
-
     let mut sessions = state.room_sessions.write().await;
 
+    // If a session exists but its sidecar process has died (crash, OOM, fatal
+    // SDK error), drop the stale entry so we fall through to a fresh spawn
+    // below instead of writing/reading on a dead pipe.
+    if let Some(session) = sessions.get_mut(&req.room_id) {
+        if !session.process.is_alive() {
+            tracing::warn!("sidecar for room {} has died; respawning", req.room_id);
+            sessions.remove(&req.room_id);
+        }
+    }
+
     if !sessions.contains_key(&req.room_id) {
-        let mcp_servers = if needs_tools {
-            serde_json::json!({
-                "farga": { "type": "http", "url": state.farga_mcp_url },
-                "dispatcher": { "type": "http", "url": state.dispatcher_mcp_url },
-            })
-        } else {
-            serde_json::json!({})
-        };
-        let allowed_tools = if needs_tools {
-            vec![
-                "Bash".to_string(), "Edit".to_string(), "Write".to_string(),
-                "mcp__farga__search_signals".to_string(),
-                "mcp__farga__read_context".to_string(),
-                "mcp__farga__list_projects".to_string(),
-                "mcp__farga__update_component_todo".to_string(),
-                "mcp__dispatcher__invoke_agent".to_string(),
-                "mcp__dispatcher__get_agent_result".to_string(),
-                "mcp__dispatcher__list_agent_specs".to_string(),
-            ]
-        } else {
-            vec!["Bash".to_string(), "Edit".to_string(), "Write".to_string()]
-        };
+        // The sidecar process is now long-lived (one per room, reused across
+        // messages), so the MCP handshake cost is paid once per session
+        // rather than once per message — always attach the full tool/MCP
+        // set so capability doesn't get frozen at whatever the room's first
+        // message happened to need.
+        let mcp_servers = serde_json::json!({
+            "farga": { "type": "http", "url": state.farga_mcp_url },
+            "dispatcher": { "type": "http", "url": state.dispatcher_mcp_url },
+        });
+        let allowed_tools = vec![
+            "Bash".to_string(), "Edit".to_string(), "Write".to_string(),
+            "mcp__farga__search_signals".to_string(),
+            "mcp__farga__read_context".to_string(),
+            "mcp__farga__list_projects".to_string(),
+            "mcp__farga__update_component_todo".to_string(),
+            "mcp__dispatcher__invoke_agent".to_string(),
+            "mcp__dispatcher__get_agent_result".to_string(),
+            "mcp__dispatcher__list_agent_specs".to_string(),
+        ];
 
         let init = SidecarInit {
             system_prompt: format!("You are Guilhem, replying in Matrix room {}.", req.room_id),
@@ -451,5 +452,28 @@ mod session_supervisor_tests {
     fn room_session_is_idle_after_timeout_elapsed() {
         let session = RoomSession::for_test(Instant::now() - Duration::from_secs(1801));
         assert!(session.is_idle(Duration::from_secs(1800)));
+    }
+
+    #[test]
+    fn sidecar_process_is_not_alive_after_child_exits() {
+        let mut session = RoomSession::for_test(Instant::now());
+
+        // /bin/true exits immediately; poll try_wait until the exit is
+        // observed (avoids a flaky fixed sleep) using a throwaway runtime,
+        // mirroring the pattern RoomSession::for_test uses to spawn it.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build runtime for test");
+        rt.block_on(async {
+            for _ in 0..100 {
+                if matches!(session.process.child.try_wait(), Ok(Some(_))) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        });
+
+        assert!(!session.process.is_alive());
     }
 }
