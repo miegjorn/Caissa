@@ -56,11 +56,48 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if .Values.openbao.enabled }}
+      initContainers:
+        # Pull SYNAPSE_ADMIN_TOKEN from OpenBao into a shared creds volume so the
+        # daemon can drive the Synapse admin API. OpenBao stays the source of truth;
+        # nothing is duplicated into a long-lived k8s secret. Mirrors the fetch-tokens
+        # pattern in the guilhem chart.
+        - name: fetch-tokens
+          image: openbao/openbao:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              export BAO_ADDR=http://openbao:8200
+              SYNAPSE_ADMIN=$(bao kv get -field=value secret/occitan/synapse-admin-token)
+              umask 077
+              cat > /creds/tokens.env <<EOF
+              export SYNAPSE_ADMIN_TOKEN='$SYNAPSE_ADMIN'
+              EOF
+              echo "synapse admin token written to /creds/tokens.env"
+          env:
+            - name: BAO_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: openbao
+                  key: token
+          volumeMounts:
+            - name: creds
+              mountPath: /creds
+      {{- end }}
       containers:
         - name: charradissa
           image: {{ .Values.charradissa.image }}:{{ .Values.charradissa.imageTag }}
           imagePullPolicy: Always
-          command: ["charradissa-daemon"]
+          # The daemon entrypoint is `charradissa-daemon`; wrap it in a shell so the
+          # OpenBao-provided tokens.env is sourced (when present) before exec'ing the
+          # daemon, which then inherits SYNAPSE_ADMIN_TOKEN. Mirrors guilhem's wrapper.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              [ -f /creds/tokens.env ] && . /creds/tokens.env
+              exec charradissa-daemon
           ports:
             - containerPort: {{ .Values.charradissa.port }}
           env:
@@ -83,6 +120,10 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /config
+            {{- if .Values.openbao.enabled }}
+            - name: creds
+              mountPath: /creds
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /health
@@ -99,6 +140,12 @@ spec:
         - name: config
           configMap:
             name: charradissa-config
+        {{- if .Values.openbao.enabled }}
+        # In-memory scratch volume for the OpenBao-fetched tokens.env (never persisted).
+        - name: creds
+          emptyDir:
+            medium: Memory
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service
