@@ -39,9 +39,14 @@ RUN npm install -g @anthropic-ai/claude-code
 
 # Agent SDK — used by agent-sidecar.js to hold persistent per-room Matrix
 # sessions open, instead of spawning a fresh claude --print process per
-# message. Installed globally so it's resolvable from /usr/local/bin/agent-sidecar.js
-# regardless of cwd.
-RUN npm install -g @anthropic-ai/claude-agent-sdk
+# message. `npm install -g` only puts CLI binaries on PATH — it does NOT
+# make a package require()-able from an arbitrary script. Install locally
+# into a fixed directory instead and point NODE_PATH at it, so plain
+# require('@anthropic-ai/claude-agent-sdk') resolves regardless of where
+# agent-sidecar.js itself lives.
+RUN mkdir -p /opt/agent-sidecar && cd /opt/agent-sidecar && \
+    npm init -y >/dev/null && npm install @anthropic-ai/claude-agent-sdk
+ENV NODE_PATH=/opt/agent-sidecar/node_modules
 
 # The persistent-session sidecar process. listen.rs spawns one instance of
 # this per actively-chatting Matrix room.
