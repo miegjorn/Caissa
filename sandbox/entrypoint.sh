@@ -64,10 +64,10 @@ if [ -n "${TASK:-}" ]; then
   # facet's tools.always_on list (see Fondament definitions/fondament/*.yaml);
   # the fallback here is intentionally read-only.
   printf '%s' "$TASK" > /tmp/agent-task.txt
-  OUTPUT=$(claude --print \
+  OUTPUT=$(claude --print "$(cat /tmp/agent-task.txt)" \
     --mcp-config /root/.claude/claude_desktop_config.json \
     --allowed-tools "${ALLOWED_TOOLS:-mcp__farga__search_signals,mcp__farga__read_context}" \
-    "$(cat /tmp/agent-task.txt)" 2>&1) || true
+    2>&1) || true
 
   # Post the result to Farga as a Signal under the session project.
   SESSION="${SESSION_ID:-agent-session}"
