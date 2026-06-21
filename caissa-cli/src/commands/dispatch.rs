@@ -11,8 +11,8 @@
 use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use k8s_openapi::api::batch::v1::{Job, JobSpec};
 use k8s_openapi::api::core::v1::{
-    Container, EnvVar, EnvVarSource, LocalObjectReference, PodSpec, PodTemplateSpec,
-    SecretKeySelector,
+    Container, EmptyDirVolumeSource, EnvVar, EnvVarSource, LocalObjectReference, PodSpec,
+    PodTemplateSpec, SecretKeySelector, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::{api::PostParams, Api, Client};
@@ -278,6 +278,64 @@ fn env_val(name: &str, value: &str) -> EnvVar {
     EnvVar { name: name.into(), value: Some(value.into()), ..Default::default() }
 }
 
+/// Same OpenBao KV reads + git credential file layout as the `fetch-tokens` init
+/// container in `deploy/charts/guilhem/templates/guilhem.yaml` — kept identical so
+/// dispatched agents authenticate the same way Guilhem's own pod does.
+const FETCH_TOKENS_SCRIPT: &str = r#"set -eu
+export BAO_ADDR=http://openbao.occitan-system.svc.cluster.local:8200
+GH=$(bao kv get -field=value secret/occitan/github)
+GL=$(bao kv get -field=value secret/occitan/gitlab)
+umask 077
+cat > /creds/tokens.env <<EOF
+export GH_TOKEN='$GH'
+export GITHUB_TOKEN='$GH'
+export GITLAB_TOKEN='$GL'
+export GITLAB_PAT_TOKEN='$GL'
+EOF
+cat > /creds/.git-credentials <<EOF
+https://x-access-token:$GH@github.com
+https://oauth2:$GL@gitlab.com
+EOF
+cat > /creds/.gitconfig <<'EOF'
+[credential]
+    helper = store --file=/creds/.git-credentials
+[user]
+    name = Guilhem de Tudela
+    email = guilhem@occitane.guilhem
+[safe]
+    directory = *
+EOF
+echo "tokens + git creds written to /creds"
+"#;
+
+fn fetch_tokens_init_container() -> Container {
+    Container {
+        name: "fetch-tokens".into(),
+        image: Some("openbao/openbao:latest".into()),
+        image_pull_policy: Some("IfNotPresent".into()),
+        command: Some(vec!["/bin/sh".into(), "-c".into()]),
+        args: Some(vec![FETCH_TOKENS_SCRIPT.into()]),
+        env: Some(vec![EnvVar {
+            name: "BAO_TOKEN".into(),
+            value_from: Some(EnvVarSource {
+                secret_key_ref: Some(SecretKeySelector {
+                    name: Some("openbao".into()),
+                    key: "token".into(),
+                    optional: None,
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }]),
+        volume_mounts: Some(vec![VolumeMount {
+            name: "creds".into(),
+            mount_path: "/creds".into(),
+            ..Default::default()
+        }]),
+        ..Default::default()
+    }
+}
+
 /// Builds the k8s Job spec for a dispatched domain/facet agent. Pulled out as a
 /// pure function so the pod spec (in particular `image_pull_secrets`) can be
 /// unit-tested without a real k8s client.
@@ -312,12 +370,26 @@ fn build_job(
                     image_pull_secrets: Some(vec![LocalObjectReference {
                         name: Some("ghcr-creds".into()),
                     }]),
+                    init_containers: Some(vec![fetch_tokens_init_container()]),
                     containers: vec![Container {
                         name: "agent".into(),
                         image: Some(image.into()),
                         env: Some(env),
+                        volume_mounts: Some(vec![VolumeMount {
+                            name: "creds".into(),
+                            mount_path: "/creds".into(),
+                            ..Default::default()
+                        }]),
                         ..Default::default()
                     }],
+                    volumes: Some(vec![Volume {
+                        name: "creds".into(),
+                        empty_dir: Some(EmptyDirVolumeSource {
+                            medium: Some("Memory".into()),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }]),
                     ..Default::default()
                 }),
             },
@@ -363,6 +435,53 @@ mod tests {
 
         let container = &job.spec.unwrap().template.spec.unwrap().containers[0];
         assert_eq!(container.image.as_deref(), Some("ghcr.io/miegjorn/caissa-sandbox:guilhem"));
+    }
+
+    #[test]
+    fn build_job_includes_credential_init_container() {
+        let job = build_job(
+            "agent-amassada-developer-abc123",
+            "amassada",
+            "developer",
+            "session-3",
+            "agents",
+            "ghcr.io/miegjorn/caissa-sandbox:guilhem",
+            vec![],
+        );
+
+        let pod_spec = job.spec.unwrap().template.spec.unwrap();
+        let init_containers = pod_spec.init_containers.expect("init_containers must be set");
+        assert_eq!(init_containers.len(), 1);
+        assert_eq!(init_containers[0].name, "fetch-tokens");
+        assert_eq!(init_containers[0].image.as_deref(), Some("openbao/openbao:latest"));
+
+        let volumes = pod_spec.volumes.expect("volumes must be set");
+        assert!(volumes.iter().any(|v| v.name == "creds"), "expected a 'creds' volume");
+
+        let agent_container = &pod_spec.containers[0];
+        let mounts = agent_container.volume_mounts.as_ref().expect("agent container must mount creds");
+        assert!(mounts.iter().any(|m| m.name == "creds" && m.mount_path == "/creds"));
+    }
+
+    #[test]
+    fn build_job_init_container_reads_openbao_token_secret() {
+        let job = build_job(
+            "agent-farga-developer-def456",
+            "farga",
+            "developer",
+            "session-4",
+            "agents",
+            "ghcr.io/miegjorn/caissa-sandbox:guilhem",
+            vec![],
+        );
+
+        let pod_spec = job.spec.unwrap().template.spec.unwrap();
+        let init_container = &pod_spec.init_containers.unwrap()[0];
+        let env = init_container.env.as_ref().expect("init container must have env");
+        let bao_token = env.iter().find(|e| e.name == "BAO_TOKEN").expect("BAO_TOKEN env var must be set");
+        let secret_ref = bao_token.value_from.as_ref().unwrap().secret_key_ref.as_ref().unwrap();
+        assert_eq!(secret_ref.name.as_deref(), Some("openbao"));
+        assert_eq!(secret_ref.key, "token");
     }
 }
 
