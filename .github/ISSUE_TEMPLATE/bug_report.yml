@@ -1,0 +1,17 @@
+name: Bug report
+description: Something is broken
+labels: ["type:bug", "component:caissa"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you expect, what did you get instead
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: false
