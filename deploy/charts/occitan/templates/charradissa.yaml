@@ -56,11 +56,40 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      initContainers:
+        # Pull SYNAPSE_ADMIN_TOKEN from OpenBao into a shared creds volume, same
+        # pattern as agents/guilhem's fetch-tokens: OpenBao stays the source of
+        # truth, nothing duplicated into a long-lived k8s secret.
+        - name: fetch-synapse-admin-token
+          image: openbao/openbao:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              export BAO_ADDR=http://openbao.occitan-system.svc.cluster.local:8200
+              TOKEN=$(bao kv get -field=value secret/occitan/synapse-admin-token)
+              umask 077
+              printf 'export SYNAPSE_ADMIN_TOKEN=%s\n' "$TOKEN" > /creds/synapse-admin-token.env
+              echo "synapse admin token written to /creds"
+          env:
+            - name: BAO_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: openbao
+                  key: token
+          volumeMounts:
+            - name: creds
+              mountPath: /creds
       containers:
         - name: charradissa
           image: {{ .Values.charradissa.image }}:{{ .Values.charradissa.imageTag }}
           imagePullPolicy: Always
-          command: ["charradissa-daemon"]
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              [ -f /creds/synapse-admin-token.env ] && . /creds/synapse-admin-token.env
+              exec charradissa-daemon
           ports:
             - containerPort: {{ .Values.charradissa.port }}
           env:
@@ -80,9 +109,13 @@ spec:
                   key: as-token
             - name: FARGA_URL
               value: "http://farga:{{ .Values.farga.port }}"
+            - name: SYNAPSE_URL
+              value: "http://synapse:{{ .Values.synapse.clientPort }}"
           volumeMounts:
             - name: config
               mountPath: /config
+            - name: creds
+              mountPath: /creds
           readinessProbe:
             httpGet:
               path: /health
@@ -99,6 +132,9 @@ spec:
         - name: config
           configMap:
             name: charradissa-config
+        - name: creds
+          emptyDir:
+            medium: Memory
 ---
 apiVersion: v1
 kind: Service
