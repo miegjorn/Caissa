@@ -61,7 +61,7 @@ if [ -n "${TASK:-}" ]; then
   # the farga/dispatcher MCP servers configured above; --allowed-tools is
   # required for ANY tool call to succeed in headless mode (no interactive
   # approval is possible). ALLOWED_TOOLS is set by the dispatcher from the
-  # facet's tools.always_on list (see Fondament definitions/fondement/*.yaml);
+  # facet's tools.always_on list (see Fondament definitions/fondament/*.yaml);
   # the fallback here is intentionally read-only.
   printf '%s' "$TASK" > /tmp/agent-task.txt
   OUTPUT=$(claude --print \
