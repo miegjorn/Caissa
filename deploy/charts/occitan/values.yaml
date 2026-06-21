@@ -6,7 +6,7 @@ imagePullSecrets:
 # ─── Gardian ─────────────────────────────────────────────────────────────────
 gardian:
   image: ghcr.io/miegjorn/gardian
-  imageTag: sha-9a2b963 # CI writes sha-<sha> here on every main push
+  imageTag: sha-a1a732a # CI writes sha-<sha> here on every main push
   replicas: 1
   # gardian-server currently hardcodes 0.0.0.0:7400 and ignores GARDIAN_PORT.
   # TODO(gardian): make gardian-server honour GARDIAN_PORT, then this can move.
