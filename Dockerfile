@@ -8,7 +8,9 @@ RUN cargo build --release -p caissa-cli
 
 FROM debian:trixie-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libssl3 \
+    && apt-get install -y --no-install-recommends ca-certificates libssl3 curl jq \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/target/release/caissa /usr/local/bin/caissa
-ENTRYPOINT ["caissa"]
+COPY scripts/load-identity.sh /usr/local/bin/load-identity.sh
+RUN chmod +x /usr/local/bin/load-identity.sh
+ENTRYPOINT ["/usr/local/bin/load-identity.sh"]
