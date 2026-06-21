@@ -25,23 +25,6 @@ function formatError(message) {
   return JSON.stringify({ error: message });
 }
 
-async function main() {
-  // Lazy require so the test file (which only needs the pure functions above)
-  // doesn't need the SDK installed to run.
-  const { query } = require('@anthropic-ai/claude-agent-sdk');
-
-  const rl = readline.createInterface({ input: process.stdin, terminal: false });
-  const lines = [];
-  rl.on('line', (line) => lines.push(line));
-
-  await new Promise((resolve) => rl.once('close', resolve));
-  // NOTE: this buffers all input before processing, which only works for a
-  // finite test harness. The real run loop (below) processes lines as they
-  // arrive instead — this main() is replaced by runLoop() in production use,
-  // kept separate so the pure parse/format functions stay testable without
-  // a live stdin stream.
-}
-
 async function runLoop() {
   const { query } = require('@anthropic-ai/claude-agent-sdk');
   const rl = readline.createInterface({ input: process.stdin, terminal: false });
@@ -55,10 +38,9 @@ async function runLoop() {
       continue;
     }
 
-    const msg = parseMessageLine(line);
-    const prompt = `${msg.sender}: ${msg.content}`;
-
     try {
+      const msg = parseMessageLine(line);
+      const prompt = `${msg.sender}: ${msg.content}`;
       let replyText = '';
       const options = {
         model: init.model,
