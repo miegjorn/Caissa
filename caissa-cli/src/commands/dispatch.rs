@@ -384,6 +384,11 @@ fn build_job(
                     containers: vec![Container {
                         name: "agent".into(),
                         image: Some(image.into()),
+                        // AGENT_IMAGE is a floating tag (e.g. ghcr.io/miegjorn/caissa-sandbox:guilhem),
+                        // not a digest. Kubernetes defaults non-":latest" tags to IfNotPresent, which
+                        // would silently keep using whatever this node cached the first time any job
+                        // ever pulled the tag — never picking up newer pushes under the same name.
+                        image_pull_policy: Some("Always".into()),
                         env: Some(env),
                         volume_mounts: Some(vec![VolumeMount {
                             name: "creds".into(),
@@ -445,6 +450,26 @@ mod tests {
 
         let container = &job.spec.unwrap().template.spec.unwrap().containers[0];
         assert_eq!(container.image.as_deref(), Some("ghcr.io/miegjorn/caissa-sandbox:guilhem"));
+    }
+
+    #[test]
+    fn build_job_always_pulls_the_agent_image() {
+        let job = build_job(
+            "agent-amassada-developer-xyz789",
+            "amassada",
+            "developer",
+            "session-5",
+            "agents",
+            "ghcr.io/miegjorn/caissa-sandbox:guilhem",
+            vec![],
+        );
+
+        let container = &job.spec.unwrap().template.spec.unwrap().containers[0];
+        assert_eq!(
+            container.image_pull_policy.as_deref(),
+            Some("Always"),
+            "AGENT_IMAGE is a floating tag — IfNotPresent (the k8s default for non-':latest' tags) would cache stale content forever"
+        );
     }
 
     #[test]
