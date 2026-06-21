@@ -1,6 +1,6 @@
 name: Feature request
 description: New capability or enhancement
-labels: ["type:feature", "component:caissa"]
+labels: ["component:caissa"]
 body:
   - type: textarea
     id: why

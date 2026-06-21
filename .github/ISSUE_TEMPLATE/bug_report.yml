@@ -1,6 +1,6 @@
 name: Bug report
 description: Something is broken
-labels: ["type:bug", "component:caissa"]
+labels: ["component:caissa"]
 body:
   - type: textarea
     id: what-happened
