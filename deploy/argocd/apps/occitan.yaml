@@ -15,8 +15,6 @@ spec:
     targetRevision: HEAD
     path: deploy/charts/occitan
     helm:
-      # Resolve bitnami/postgresql dependency at sync time.
-      # Requires the bitnami repo registered in ArgoCD (see docs/install.md).
       releaseName: occitan
       valueFiles:
         - values.yaml
