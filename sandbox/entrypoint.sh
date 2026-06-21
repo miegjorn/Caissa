@@ -51,9 +51,23 @@ if [ -n "${TASK:-}" ]; then
     printf '%s' "$AGENT_CONTEXT" > /workspace/CLAUDE.md
   fi
 
-  # Run the task non-interactively, capture output.
+  # Source OpenBao-provided git/gh credentials if the fetch-tokens init
+  # container ran (it always does for dispatched agent Jobs — see
+  # build_job in caissa-cli/src/commands/dispatch.rs).
+  [ -f /creds/tokens.env ] && . /creds/tokens.env
+  export GIT_CONFIG_GLOBAL=/creds/.gitconfig
+
+  # Run the task non-interactively, capture output. --mcp-config connects
+  # the farga/dispatcher MCP servers configured above; --allowed-tools is
+  # required for ANY tool call to succeed in headless mode (no interactive
+  # approval is possible). ALLOWED_TOOLS is set by the dispatcher from the
+  # facet's tools.always_on list (see Fondament definitions/fondement/*.yaml);
+  # the fallback here is intentionally read-only.
   printf '%s' "$TASK" > /tmp/agent-task.txt
-  OUTPUT=$(claude --print "$(cat /tmp/agent-task.txt)" 2>&1) || true
+  OUTPUT=$(claude --print \
+    --mcp-config /root/.claude/claude_desktop_config.json \
+    --allowed-tools "${ALLOWED_TOOLS:-mcp__farga__search_signals,mcp__farga__read_context}" \
+    "$(cat /tmp/agent-task.txt)" 2>&1) || true
 
   # Post the result to Farga as a Signal under the session project.
   SESSION="${SESSION_ID:-agent-session}"
