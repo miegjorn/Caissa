@@ -376,6 +376,7 @@ async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::
             "mcp__farga__read_context".to_string(),
             "mcp__farga__list_projects".to_string(),
             "mcp__farga__update_component_todo".to_string(),
+            "mcp__farga__write_signal".to_string(),
             "mcp__dispatcher__invoke_agent".to_string(),
             "mcp__dispatcher__get_agent_result".to_string(),
             "mcp__dispatcher__list_agent_specs".to_string(),
