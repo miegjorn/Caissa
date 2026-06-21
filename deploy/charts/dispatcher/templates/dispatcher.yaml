@@ -52,6 +52,8 @@ spec:
         app: dispatcher
     spec:
       serviceAccountName: caissa-dispatcher
+      imagePullSecrets:
+        - name: ghcr-creds
       containers:
         - name: dispatcher
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
