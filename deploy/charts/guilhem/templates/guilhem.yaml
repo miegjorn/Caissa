@@ -69,12 +69,15 @@ spec:
               export BAO_ADDR=http://openbao.occitan-system.svc.cluster.local:8200
               GH=$(bao kv get -field=value secret/occitan/github)
               GL=$(bao kv get -field=value secret/occitan/gitlab)
+              SYNAPSE_ADMIN=$(bao kv get -field=value secret/occitan/synapse-admin-token)
               umask 077
               cat > /creds/tokens.env <<EOF
               export GH_TOKEN='$GH'
               export GITHUB_TOKEN='$GH'
               export GITLAB_TOKEN='$GL'
               export GITLAB_PAT_TOKEN='$GL'
+              export SYNAPSE_ADMIN_TOKEN='$SYNAPSE_ADMIN'
+              export SYNAPSE_URL='http://synapse.occitan-system.svc.cluster.local:8008'
               EOF
               cat > /creds/.git-credentials <<EOF
               https://x-access-token:$GH@github.com
