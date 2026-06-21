@@ -94,7 +94,11 @@ fn tool_list() -> Value {
                         },
                         "context": {
                             "type": "string",
-                            "description": "Pre-assembled domain+facet context markdown. Written to /workspace/CLAUDE.md before the agent runs. Load from /fondament/domains/<domain>.yaml and /fondament/roles/<facet>.yaml in your session."
+                            "description": "Pre-assembled domain+facet context markdown. Written to /workspace/CLAUDE.md before the agent runs. Load from /fondament/domains/<domain>.yaml for domain context. For facet context, the filename does NOT match the facet keyword — use this mapping: developer->developer.yaml, infra->infra-engineer.yaml, qa->qa-engineer.yaml, security->security-analyst.yaml, architect->app-architect.yaml, db->data-architect.yaml. Read /fondament/roles/<mapped-filename> in your session."
+                        },
+                        "allowed_tools": {
+                            "type": "string",
+                            "description": "Comma-separated Claude tool names for the spawned agent, read from the facet file's tools.always_on list (same file as the context mapping above). Native tools pass through as-is (Bash, Edit, Write); Mcp tools are formatted as mcp__<server>__<tool> (e.g. mcp__farga__search_signals). Defaults to a read-only Farga tool set if omitted."
                         },
                         "session_id": {
                             "type": "string",
@@ -178,6 +182,9 @@ async fn call_tool(state: &DispatchState, name: &str, args: &Value) -> anyhow::R
             let facet = args["facet"].as_str().unwrap_or("").to_string();
             let task = args["task"].as_str().unwrap_or("").to_string();
             let context = args["context"].as_str().unwrap_or("").to_string();
+            let allowed_tools = args["allowed_tools"].as_str()
+                .unwrap_or("mcp__farga__search_signals,mcp__farga__read_context")
+                .to_string();
             let session_id = args["session_id"].as_str().unwrap_or("").to_string();
 
             anyhow::ensure!(!domain.is_empty(), "domain is required");
@@ -191,6 +198,7 @@ async fn call_tool(state: &DispatchState, name: &str, args: &Value) -> anyhow::R
                 &facet,
                 &task,
                 &context,
+                &allowed_tools,
                 &session_id,
                 &state.agent_image,
                 &state.agents_namespace,
@@ -233,6 +241,7 @@ async fn create_agent_job(
     facet: &str,
     task: &str,
     context: &str,
+    allowed_tools: &str,
     session_id: &str,
     image: &str,
     namespace: &str,
@@ -247,6 +256,7 @@ async fn create_agent_job(
         env_val("FACET", facet),
         env_val("TASK", task),
         env_val("AGENT_CONTEXT", context),
+        env_val("ALLOWED_TOOLS", allowed_tools),
         env_val("SESSION_ID", session_id),
         env_val("FARGA_URL", farga_url),
         env_val("FARGA_MCP_URL", farga_mcp_url),
@@ -545,7 +555,7 @@ fn list_specs() -> String {
             lines.push(format!("  {}/{}", domain, facet));
         }
     }
-    lines.push("\nLoad context from /fondament/domains/<domain>.yaml and /fondament/roles/<facet>.yaml\nbefore calling invoke_agent.".into());
+    lines.push("\nLoad domain context from /fondament/domains/<domain>.yaml.\nFacet filenames under /fondament/roles/ do not match the facet keyword above —\nuse this mapping: developer->developer.yaml, infra->infra-engineer.yaml,\nqa->qa-engineer.yaml, security->security-analyst.yaml, architect->app-architect.yaml,\ndb->data-architect.yaml. Read the facet file's tools.always_on list and pass it\nas invoke_agent's allowed_tools (comma-separated tool names).".into());
     lines.join("\n")
 }
 
