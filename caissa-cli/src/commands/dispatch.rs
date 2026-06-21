@@ -11,7 +11,8 @@
 use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use k8s_openapi::api::batch::v1::{Job, JobSpec};
 use k8s_openapi::api::core::v1::{
-    Container, EnvVar, EnvVarSource, PodSpec, PodTemplateSpec, SecretKeySelector,
+    Container, EnvVar, EnvVarSource, LocalObjectReference, PodSpec, PodTemplateSpec,
+    SecretKeySelector,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::{api::PostParams, Api, Client};
@@ -264,9 +265,34 @@ async fn create_agent_job(
         },
     ];
 
-    let job = Job {
+    let job = build_job(&job_name, domain, facet, session_id, namespace, image, env);
+
+    let api: Api<Job> = Api::namespaced(client.clone(), namespace);
+    api.create(&PostParams::default(), &job).await
+        .map_err(|e| anyhow::anyhow!("k8s job create failed: {}", e))?;
+
+    Ok(job_name)
+}
+
+fn env_val(name: &str, value: &str) -> EnvVar {
+    EnvVar { name: name.into(), value: Some(value.into()), ..Default::default() }
+}
+
+/// Builds the k8s Job spec for a dispatched domain/facet agent. Pulled out as a
+/// pure function so the pod spec (in particular `image_pull_secrets`) can be
+/// unit-tested without a real k8s client.
+fn build_job(
+    job_name: &str,
+    domain: &str,
+    facet: &str,
+    session_id: &str,
+    namespace: &str,
+    image: &str,
+    env: Vec<EnvVar>,
+) -> Job {
+    Job {
         metadata: ObjectMeta {
-            name: Some(job_name.clone()),
+            name: Some(job_name.into()),
             namespace: Some(namespace.into()),
             labels: Some([
                 ("app.kubernetes.io/managed-by".into(), "caissa-dispatcher".into()),
@@ -283,6 +309,9 @@ async fn create_agent_job(
                 metadata: None,
                 spec: Some(PodSpec {
                     restart_policy: Some("Never".into()),
+                    image_pull_secrets: Some(vec![LocalObjectReference {
+                        name: Some("ghcr-creds".into()),
+                    }]),
                     containers: vec![Container {
                         name: "agent".into(),
                         image: Some(image.into()),
@@ -295,17 +324,46 @@ async fn create_agent_job(
             ..Default::default()
         }),
         ..Default::default()
-    };
-
-    let api: Api<Job> = Api::namespaced(client.clone(), namespace);
-    api.create(&PostParams::default(), &job).await
-        .map_err(|e| anyhow::anyhow!("k8s job create failed: {}", e))?;
-
-    Ok(job_name)
+    }
 }
 
-fn env_val(name: &str, value: &str) -> EnvVar {
-    EnvVar { name: name.into(), value: Some(value.into()), ..Default::default() }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_job_sets_ghcr_pull_secret() {
+        let job = build_job(
+            "agent-charradissa-infra-abc123",
+            "charradissa",
+            "infra",
+            "session-1",
+            "agents",
+            "ghcr.io/miegjorn/caissa-sandbox:guilhem",
+            vec![],
+        );
+
+        let pod_spec = job.spec.unwrap().template.spec.unwrap();
+        let secrets = pod_spec.image_pull_secrets.expect("image_pull_secrets must be set");
+        assert_eq!(secrets.len(), 1);
+        assert_eq!(secrets[0].name.as_deref(), Some("ghcr-creds"));
+    }
+
+    #[test]
+    fn build_job_uses_the_given_image() {
+        let job = build_job(
+            "agent-gardian-developer-abc123",
+            "gardian",
+            "developer",
+            "session-2",
+            "agents",
+            "ghcr.io/miegjorn/caissa-sandbox:guilhem",
+            vec![],
+        );
+
+        let container = &job.spec.unwrap().template.spec.unwrap().containers[0];
+        assert_eq!(container.image.as_deref(), Some("ghcr.io/miegjorn/caissa-sandbox:guilhem"));
+    }
 }
 
 // ── Job result polling ────────────────────────────────────────────────────────

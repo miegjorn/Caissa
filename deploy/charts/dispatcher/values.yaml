@@ -5,7 +5,7 @@ image:
 
 port: 9090
 
-agentImage: caissa-sandbox:guilhem
+agentImage: ghcr.io/miegjorn/caissa-sandbox:guilhem
 agentsNamespace: agents
 
 fargaUrl: http://farga.occitan-system.svc.cluster.local:7500
