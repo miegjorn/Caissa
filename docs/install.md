@@ -334,10 +334,12 @@ kubectl get deployment guilhem -n agents
 kubectl logs -n agents deployment/guilhem -f
 ```
 
-Guilhem's pod runs `caissa listen` — a lightweight HTTP server on port 8080. It accepts
-`POST /trigger/chronicle` and runs a non-interactive Claude Code session. Token cost is
-zero when idle. Chronicle runs use `claude-haiku-4-5-20251001` by default; override with
-the `chronicle_model` key in `caissa.toml` or the `CHRONICLE_MODEL` env var.
+Guilhem's pod runs `caissa listen` — a lightweight HTTP server on port 8080, with two
+independent endpoints. `POST /trigger/chronicle` is one-shot: each call runs a
+non-interactive Claude Code session and exits. Token cost is zero when idle. Chronicle
+runs use `claude-haiku-4-5-20251001` by default; override with the `chronicle_model` key
+in `caissa.toml` or the `CHRONICLE_MODEL` env var. `POST /matrix/reply` is NOT one-shot —
+see "Guilhem in Matrix rooms" below for its persistent-session model.
 
 Trigger a manual chronicle run:
 
@@ -365,11 +367,24 @@ state via tools instead of shelling out. Claude's output is then posted to Farga
 signal by `caissa`.
 
 **Guilhem in Matrix rooms:** Charradissa is the Matrix transport layer; it forwards every
-message to Guilhem's `POST /matrix/reply` endpoint. Guilhem runs `claude --print` with
-his full persona, Farga MCP, and `Bash` allowed — so `gh`, `glab`, and `git` are all
-available in the conversation. Set `GUILHEM_URL` in the Charradissa env (defaults to
-`http://guilhem.agents.svc.cluster.local:8080`) and `matrix_model` in `caissa.toml`
-(defaults to `claude-sonnet-4-6`).
+message to Guilhem's `POST /matrix/reply` endpoint. Each room gets one persistent
+`agent-sidecar.js` process (Node.js, `Caissa/sandbox/agent-sidecar.js`, using the Claude
+Agent SDK's `query()`), spawned on that room's first message and reused for every
+message after — giving real conversational continuity, not a flattened restatement of
+history. Every session gets the full Farga + dispatcher MCP/tool set (`Bash`, `Edit`,
+`Write`, plus `mcp__farga__*` and `mcp__dispatcher__*`) unconditionally at spawn, so `gh`,
+`glab`, and `git` are available from the first message in any room. A room idle past 30
+minutes has its sidecar killed and its session entry reaped; a crashed sidecar is detected
+on the next message and respawned transparently. Sessions are in-memory only — a pod
+restart drops all live Matrix sessions (acceptable: conversational state resetting is a
+reasonable trade, not data loss — Guilhem's actual memory lives in Farga). Set `GUILHEM_URL`
+in the Charradissa env (defaults to `http://guilhem.agents.svc.cluster.local:8080`) and
+`matrix_model` in `caissa.toml` (defaults to `claude-sonnet-4-6`).
+
+Skills (Superpowers) are NOT yet available in Matrix sessions — the agent image doesn't
+bake them in (a CI runner has no local Superpowers install to copy from at build time;
+this is a deferred decision, not a bug). Every session's `skills` list is hardcoded empty
+regardless of what a persona's YAML `skills:` field says.
 
 Trigger a manual Matrix reply test:
 

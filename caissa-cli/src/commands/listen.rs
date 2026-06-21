@@ -1,11 +1,21 @@
-/// Guilhem daemon — lightweight webhook listener.
+/// Guilhem daemon — lightweight webhook listener with two independent handlers.
 ///
-/// Runs an HTTP server that accepts chronicle trigger events from Argo Workflows,
-/// git webhooks, or cron. When triggered, it runs `claude --print "<task>"` as
-/// a subprocess (non-interactive) and posts the output as a Signal to Farga.
-/// (Matrix presence is Charradissa's appservice, not this listener.)
+/// `POST /trigger/chronicle` — accepts chronicle trigger events from Argo
+/// Workflows, git webhooks, or cron. One-shot: runs `claude --print "<task>"`
+/// as a subprocess, posts the output as a Signal to Farga, exits.
 ///
-/// Token usage is proportional to actual events — the server itself costs nothing.
+/// `POST /matrix/reply` — Charradissa (the Matrix appservice/bridge) forwards
+/// every room message here; this listener generates the actual reply.
+/// Per-room, NOT one-shot: the first message in a room spawns a persistent
+/// `agent-sidecar.js` child process (Claude Agent SDK, `sandbox/agent-sidecar.js`),
+/// and later messages in the same room are sent to that same process over
+/// stdin/stdout, giving real conversational continuity via the SDK's `resume`
+/// session mechanism. A background sweep reaps sessions idle past 30 minutes;
+/// a dead/crashed sidecar is detected and respawned automatically on the next
+/// message for that room. See `ListenState::room_sessions`.
+///
+/// Token usage is proportional to actual events for chronicle; Matrix sessions
+/// cost tokens for as long as a room stays active (up to the idle timeout).
 
 use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};

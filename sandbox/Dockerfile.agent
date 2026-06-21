@@ -53,10 +53,16 @@ ENV NODE_PATH=/opt/agent-sidecar/node_modules
 COPY agent-sidecar.js /usr/local/bin/agent-sidecar.js
 RUN chmod +x /usr/local/bin/agent-sidecar.js
 
-# Skills/plugins (e.g. Superpowers) are deliberately NOT baked in yet — doing
-# so requires a real decision on how a CI runner (no local ~/.claude/plugins/)
-# provisions third-party plugin code at build time. Deferred; sidecar runs
-# with skills: [] until that's resolved. See Caissa Farga TODO.
+# Skills/plugins (e.g. Superpowers) are deliberately NOT baked in yet. Real
+# blocker: build-guilhem.yml runs on a fresh GitHub Actions runner with no
+# local ~/.claude/plugins/ to copy from (Superpowers only exists on a
+# developer's machine today) — baking a third-party plugin into a production
+# image via an unauthenticated network fetch in CI is a supply-chain decision
+# that needs an explicit choice (vendor it into the repo, fetch from its real
+# source with review, or something else), not a unilateral one. Until that's
+# decided, the sidecar's init payload always gets skills: [] regardless of a
+# persona's YAML skills: field. Tracked in Caissa's Farga component TODO
+# (project "occitan", component "caissa").
 
 # The caissa binary — Guilhem's pod runs `caissa listen` (the event listener) and
 # the binary also drives chronicle runs. Without it the deployment can't start.
