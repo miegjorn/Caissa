@@ -467,3 +467,20 @@ You need to build the image first: `caissa build guilhem`
 ```bash
 argocd app sync occitan
 ```
+
+**CI job fails pulling a cross-repo ghcr.io package with `denied`, even though `docker login` "Succeeded"**
+This org's GitHub plan does not support org-level Actions secrets on private repos, so a
+secret created at `https://github.com/organizations/miegjorn/settings/secrets/actions` is
+silently ignored by private repos — each private repo needs its own **repo-level** secret
+of the same name (`Settings > Secrets and variables > Actions` on the repo itself), which
+takes precedence anyway when both exist. `MIEGJORN_CI_TOKEN` must be set per-repo (Fondament,
+Amassada, Charradissa, Farga, Gardian) with the classic GHCR PAT (`read:packages` +
+`write:packages`), not a fine-grained PAT — fine-grained tokens cannot read packages
+published by a different repo in the org. Update all of them in one pass:
+```bash
+for repo in Fondament Amassada Charradissa Farga Gardian; do
+  printf '%s' "$bao" | gh secret set MIEGJORN_CI_TOKEN --repo miegjorn/$repo
+done
+```
+`docker login` succeeding is not proof the token works — ghcr.io only checks package-read
+authorization at pull time, per repository scope.
