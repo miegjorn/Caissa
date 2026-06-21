@@ -1,7 +1,7 @@
 # Guilhem agent chart values.
 # Image is built by: caissa build guilhem
 
-image: ghcr.io/miegjorn/caissa-sandbox:guilhem-sha-95b534c # CI writes sha-tagged value here
+image: ghcr.io/miegjorn/caissa-sandbox:guilhem-sha-9f28ea2 # CI writes sha-tagged value here
 imagePullSecrets:
   - name: ghcr-creds
 # caissa listen is implemented — Guilhem is alive (event listener, ~0 idle cost).
