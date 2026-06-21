@@ -110,13 +110,13 @@ ArgoCD needs read access to the Caissa repo to pull chart changes.
 
 **Via SSH (recommended — reuses your existing key):**
 ```bash
-argocd repo add git@github.com:bedardpl/Caissa.git \
+argocd repo add git@github.com:miegjorn/Caissa.git \
   --ssh-private-key-path ~/.ssh/id_ed25519
 ```
 
 **Via HTTPS token:**
 ```bash
-argocd repo add https://github.com/bedardpl/Caissa.git \
+argocd repo add https://github.com/miegjorn/Caissa.git \
   --username bedardpl --password <github-token>
 ```
 
@@ -153,15 +153,15 @@ cd ..   # parent dir holding all the repos
 # gardian / farga / amassada build straight from their repo root
 for s in gardian:Gardian farga:Farga amassada:Amassada; do
   svc=${s%%:*}; repo=${s##*:}
-  docker build -t "ghcr.io/occitan/${svc}:latest" "$repo"
-  kind load docker-image "ghcr.io/occitan/${svc}:latest" --name occitan
+  docker build -t "ghcr.io/miegjorn/${svc}:latest" "$repo"
+  kind load docker-image "ghcr.io/miegjorn/${svc}:latest" --name occitan
 done
 
 # charradissa-core has a path dependency on amassada-core, so Amassada must be
 # supplied as a named build context (it lands at /Amassada inside the build):
 docker build --build-context amassada=./Amassada \
-  -t ghcr.io/occitan/charradissa:latest ./Charradissa
-kind load docker-image ghcr.io/occitan/charradissa:latest --name occitan
+  -t ghcr.io/miegjorn/charradissa:latest ./Charradissa
+kind load docker-image ghcr.io/miegjorn/charradissa:latest --name occitan
 ```
 
 Notes:
@@ -312,17 +312,17 @@ kubectl create secret generic argocd-ci-token \
 Trigger a manual build of all services (first time only):
 
 ```bash
-argo submit deploy/workflows/ci-pipeline.yaml -n argo -p service=gardian -p registry=ghcr.io/bedardpl --wait
-argo submit deploy/workflows/ci-pipeline.yaml -n argo -p service=farga   -p registry=ghcr.io/bedardpl --wait
-argo submit deploy/workflows/ci-pipeline.yaml -n argo -p service=amassada -p registry=ghcr.io/bedardpl --wait
-argo submit deploy/workflows/ci-pipeline.yaml -n argo -p service=charradissa -p registry=ghcr.io/bedardpl --wait
+argo submit deploy/workflows/ci-pipeline.yaml -n argo -p service=gardian -p registry=ghcr.io/miegjorn --wait
+argo submit deploy/workflows/ci-pipeline.yaml -n argo -p service=farga   -p registry=ghcr.io/miegjorn --wait
+argo submit deploy/workflows/ci-pipeline.yaml -n argo -p service=amassada -p registry=ghcr.io/miegjorn --wait
+argo submit deploy/workflows/ci-pipeline.yaml -n argo -p service=charradissa -p registry=ghcr.io/miegjorn --wait
 ```
 
 Build and push the Guilhem agent image, then load it into kind:
 
 ```bash
 caissa build guilhem
-caissa push guilhem --registry ghcr.io/bedardpl
+caissa push guilhem --registry ghcr.io/miegjorn
 # or load directly into kind (no registry needed for local):
 kind load docker-image caissa-sandbox:guilhem --name occitan
 ```

@@ -12,7 +12,7 @@ pub struct CaissaConfig {
     /// Path to the Fondament repo root. Used by `caissa build` to resolve agent definitions.
     #[serde(default = "default_fondament_path")]
     pub fondament_path: String,
-    /// Container registry prefix for `caissa push` (e.g. "ghcr.io/occitan").
+    /// Container registry prefix for `caissa push` (e.g. "ghcr.io/miegjorn").
     /// When absent, the local tag is pushed as-is.
     #[serde(default)]
     pub registry: Option<String>,
