@@ -3,6 +3,7 @@ use caissa_core::{agent, config::load_config};
 
 const AGENT_DOCKERFILE: &str = include_str!("../../../sandbox/Dockerfile.agent");
 const AGENT_ENTRYPOINT: &str = include_str!("../../../sandbox/entrypoint.sh");
+const AGENT_SIDECAR: &str = include_str!("../../../sandbox/agent-sidecar.js");
 
 pub async fn run(generation: &str, fondament_path: Option<&str>) -> anyhow::Result<()> {
     let config = load_config()?;
@@ -23,6 +24,7 @@ pub async fn run(generation: &str, fondament_path: Option<&str>) -> anyhow::Resu
     std::fs::write(build_dir.join("claude.md"), &claude_md)?;
     std::fs::write(build_dir.join("Dockerfile"), AGENT_DOCKERFILE)?;
     std::fs::write(build_dir.join("entrypoint.sh"), AGENT_ENTRYPOINT)?;
+    std::fs::write(build_dir.join("agent-sidecar.js"), AGENT_SIDECAR)?;
 
     // Copy Fondament domain + role definitions into the build context so they
     // are baked into the image at /fondament/domains/ and /fondament/roles/.
