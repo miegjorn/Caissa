@@ -10,6 +10,7 @@
 use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::collections::HashMap;
 use caissa_core::config::load_config;
 
 #[derive(Clone)]
@@ -20,6 +21,25 @@ struct ListenState {
     chronicle_model: String,
     matrix_model: String,
     amassada_url: String,
+    dispatcher_mcp_url: String,
+    /// One persistent agent-sidecar.js child process per actively-chatting
+    /// Matrix room. Reaped by an idle-timeout sweep (see spawn_idle_reaper).
+    room_sessions: Arc<tokio::sync::RwLock<HashMap<String, RoomSession>>>,
+}
+
+/// One room's live session: the running sidecar child process, the Claude
+/// Agent SDK session_id captured from its first reply (for --resume-style
+/// continuity on later turns), and when it last handled a message.
+#[derive(Clone)]
+struct RoomSession {
+    session_id: Option<String>,
+    last_activity: std::time::Instant,
+}
+
+impl RoomSession {
+    fn is_idle(&self, timeout: std::time::Duration) -> bool {
+        self.last_activity.elapsed() >= timeout
+    }
 }
 
 #[derive(Deserialize)]
@@ -54,6 +74,8 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         chronicle_model: config.chronicle_model,
         matrix_model: config.matrix_model,
         amassada_url: config.amassada_url,
+        dispatcher_mcp_url: config.dispatcher_mcp_url,
+        room_sessions: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
     });
 
     let app = Router::new()
@@ -300,4 +322,28 @@ async fn post_signal(state: &ListenState, content: &str) -> anyhow::Result<()> {
         .error_for_status()?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod session_supervisor_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn room_session_is_not_idle_when_recently_active() {
+        let session = RoomSession {
+            session_id: None,
+            last_activity: Instant::now(),
+        };
+        assert!(!session.is_idle(Duration::from_secs(1800)));
+    }
+
+    #[test]
+    fn room_session_is_idle_after_timeout_elapsed() {
+        let session = RoomSession {
+            session_id: None,
+            last_activity: Instant::now() - Duration::from_secs(1801),
+        };
+        assert!(session.is_idle(Duration::from_secs(1800)));
+    }
 }
