@@ -37,6 +37,22 @@ RUN set -eux; \
 # Install Claude Code
 RUN npm install -g @anthropic-ai/claude-code
 
+# Agent SDK — used by agent-sidecar.js to hold persistent per-room Matrix
+# sessions open, instead of spawning a fresh claude --print process per
+# message. Installed globally so it's resolvable from /usr/local/bin/agent-sidecar.js
+# regardless of cwd.
+RUN npm install -g @anthropic-ai/claude-agent-sdk
+
+# The persistent-session sidecar process. listen.rs spawns one instance of
+# this per actively-chatting Matrix room.
+COPY agent-sidecar.js /usr/local/bin/agent-sidecar.js
+RUN chmod +x /usr/local/bin/agent-sidecar.js
+
+# Bake Superpowers so agent-sidecar.js's SDK sessions can discover and use
+# its skills (brainstorming, writing-plans, TDD, etc.) — the SDK discovers
+# skills via the filesystem, not a programmatic registration API.
+COPY superpowers-plugin/ /root/.claude/plugins/cache/claude-plugins-official/superpowers/
+
 # The caissa binary — Guilhem's pod runs `caissa listen` (the event listener) and
 # the binary also drives chronicle runs. Without it the deployment can't start.
 COPY --from=caissabin /usr/local/bin/caissa /usr/local/bin/caissa
