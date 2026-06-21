@@ -27,6 +27,13 @@ data:
 
     [projects]
     autodiscover = {{ .Values.charradissa.config.projects.autodiscover }}
+    {{- range .Values.charradissa.componentAgents }}
+
+    [[component_agents]]
+    name = {{ .name | quote }}
+    room_id = {{ .roomId | quote }}
+    system_prompt = {{ .systemPrompt | toJson }}
+    {{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
