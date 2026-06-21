@@ -259,7 +259,7 @@ async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::
             "--mcp-config",
             path.to_str().unwrap(),
             "--allowed-tools",
-            "Bash,Edit,Write,mcp__farga__search_signals,mcp__farga__read_context,mcp__farga__list_projects",
+            "Bash,Edit,Write,mcp__farga__search_signals,mcp__farga__read_context,mcp__farga__list_projects,mcp__farga__update_component_todo",
         ]);
         Some(path)
     } else {
