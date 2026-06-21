@@ -27,16 +27,105 @@ struct ListenState {
     room_sessions: Arc<tokio::sync::RwLock<HashMap<String, RoomSession>>>,
 }
 
-/// One room's live session: the running sidecar child process, the Claude
-/// Agent SDK session_id captured from its first reply (for --resume-style
-/// continuity on later turns), and when it last handled a message.
-#[derive(Clone)]
+/// A running agent-sidecar.js child process for one room.
+struct SidecarProcess {
+    child: tokio::process::Child,
+    stdin: tokio::process::ChildStdin,
+    stdout: tokio::io::BufReader<tokio::process::ChildStdout>,
+}
+
+impl SidecarProcess {
+    async fn spawn(init: &SidecarInit) -> anyhow::Result<Self> {
+        use tokio::io::AsyncWriteExt;
+
+        let mut child = tokio::process::Command::new("node")
+            .arg("/usr/local/bin/agent-sidecar.js")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()?;
+
+        let mut stdin = child.stdin.take().expect("stdin was piped");
+        let stdout = child.stdout.take().expect("stdout was piped");
+
+        let init_line = serde_json::to_string(init)?;
+        stdin.write_all(init_line.as_bytes()).await?;
+        stdin.write_all(b"\n").await?;
+
+        Ok(Self {
+            child,
+            stdin,
+            stdout: tokio::io::BufReader::new(stdout),
+        })
+    }
+
+    async fn send(&mut self, sender: &str, content: &str) -> anyhow::Result<String> {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+        let msg = serde_json::json!({ "sender": sender, "content": content });
+        let line = serde_json::to_string(&msg)?;
+        self.stdin.write_all(line.as_bytes()).await?;
+        self.stdin.write_all(b"\n").await?;
+
+        let mut response_line = String::new();
+        self.stdout.read_line(&mut response_line).await?;
+
+        let parsed: serde_json::Value = serde_json::from_str(response_line.trim())?;
+        if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
+            anyhow::bail!("sidecar error: {}", err);
+        }
+        Ok(parsed.get("reply").and_then(|v| v.as_str()).unwrap_or("").to_string())
+    }
+
+    fn kill(&mut self) {
+        let _ = self.child.start_kill();
+    }
+}
+
+#[derive(serde::Serialize)]
+struct SidecarInit {
+    #[serde(rename = "systemPrompt")]
+    system_prompt: String,
+    model: String,
+    #[serde(rename = "allowedTools")]
+    allowed_tools: Vec<String>,
+    skills: Vec<String>,
+    #[serde(rename = "mcpServers")]
+    mcp_servers: serde_json::Value,
+}
+
+/// One room's live session: the running sidecar child process, and when it
+/// last handled a message.
 struct RoomSession {
-    session_id: Option<String>,
+    process: SidecarProcess,
     last_activity: std::time::Instant,
 }
 
 impl RoomSession {
+    #[cfg(test)]
+    fn for_test(last_activity: std::time::Instant) -> Self {
+        // tokio::process::Command::spawn() needs a live Tokio runtime (it
+        // registers the child with the reactor for SIGCHLD), but these are
+        // plain #[test] functions, not #[tokio::test]. Stand up a throwaway
+        // current-thread runtime just for the spawn/take calls below.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build runtime for test");
+        let (child, stdin, stdout) = rt.block_on(async {
+            let mut cmd = tokio::process::Command::new("true");
+            cmd.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped());
+            let mut child = cmd.spawn().expect("spawn /bin/true for test");
+            let stdin = child.stdin.take().expect("stdin was piped");
+            let stdout = child.stdout.take().expect("stdout was piped");
+            (child, stdin, stdout)
+        });
+        Self {
+            process: SidecarProcess { child, stdin, stdout: tokio::io::BufReader::new(stdout) },
+            last_activity,
+        }
+    }
+
     fn is_idle(&self, timeout: std::time::Duration) -> bool {
         self.last_activity.elapsed() >= timeout
     }
@@ -77,6 +166,8 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         dispatcher_mcp_url: config.dispatcher_mcp_url,
         room_sessions: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
     });
+
+    tokio::spawn(spawn_idle_reaper(Arc::clone(&state.room_sessions)));
 
     let app = Router::new()
         .route("/trigger/chronicle", post(handle_chronicle))
@@ -251,57 +342,78 @@ fn needs_farga_mcp(content: &str) -> bool {
 }
 
 async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::Result<String> {
-    let mut prompt = format!("Matrix room: {}\n\nConversation history (oldest first):\n", req.room_id);
-    for entry in &req.history {
-        prompt.push_str(&format!("{}: {}\n", entry.sender, entry.content));
-    }
-    prompt.push_str(&format!(
-        "\nLatest message from {}:\n{}\n\nReply as Guilhem.",
-        req.sender, req.content
-    ));
+    let needs_tools = needs_farga_mcp(&req.content);
 
-    let mut cmd = tokio::process::Command::new("claude");
-    cmd.args(["--print", &prompt, "--model", &state.matrix_model])
-        .env("FARGA_URL", &state.farga_url)
-        .env("FARGA_PROJECT", &state.farga_project);
+    let mut sessions = state.room_sessions.write().await;
 
-    // Only pay the MCP connection cost when the message explicitly needs live Farga reads.
-    let mcp_path = if needs_farga_mcp(&req.content) {
-        let mcp_config = format!(
-            r#"{{"mcpServers":{{"farga":{{"type":"http","url":"{}"}}}}}}"#,
-            state.farga_mcp_url
+    if !sessions.contains_key(&req.room_id) {
+        let mcp_servers = if needs_tools {
+            serde_json::json!({
+                "farga": { "type": "http", "url": state.farga_mcp_url },
+                "dispatcher": { "type": "http", "url": state.dispatcher_mcp_url },
+            })
+        } else {
+            serde_json::json!({})
+        };
+        let allowed_tools = if needs_tools {
+            vec![
+                "Bash".to_string(), "Edit".to_string(), "Write".to_string(),
+                "mcp__farga__search_signals".to_string(),
+                "mcp__farga__read_context".to_string(),
+                "mcp__farga__list_projects".to_string(),
+                "mcp__farga__update_component_todo".to_string(),
+                "mcp__dispatcher__invoke_agent".to_string(),
+                "mcp__dispatcher__get_agent_result".to_string(),
+                "mcp__dispatcher__list_agent_specs".to_string(),
+            ]
+        } else {
+            vec!["Bash".to_string(), "Edit".to_string(), "Write".to_string()]
+        };
+
+        let init = SidecarInit {
+            system_prompt: format!("You are Guilhem, replying in Matrix room {}.", req.room_id),
+            model: state.matrix_model.clone(),
+            allowed_tools,
+            skills: vec![], // populated from the resolved facet's `skills` list by the caller; empty until Fondament-resolver wiring exists (out of scope, matches tools.always_on's existing manual-relay model)
+            mcp_servers,
+        };
+
+        let process = SidecarProcess::spawn(&init).await?;
+        sessions.insert(
+            req.room_id.clone(),
+            RoomSession { process, last_activity: std::time::Instant::now() },
         );
-        let path = std::env::temp_dir().join(format!(
-            "guilhem-matrix-mcp-{}.json",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::write(&path, &mcp_config)?;
-        tracing::debug!("matrix reply: attaching Farga MCP");
-        cmd.args([
-            "--mcp-config",
-            path.to_str().unwrap(),
-            "--allowed-tools",
-            "Bash,Edit,Write,mcp__farga__search_signals,mcp__farga__read_context,mcp__farga__list_projects,mcp__farga__update_component_todo",
-        ]);
-        Some(path)
-    } else {
-        tracing::debug!("matrix reply: conversational path, no MCP");
-        cmd.args(["--allowed-tools", "Bash,Edit,Write"]);
-        None
-    };
-
-    let output = cmd.output().await?;
-
-    if let Some(path) = &mcp_path {
-        let _ = std::fs::remove_file(path);
     }
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("claude exited non-zero: {}", stderr);
-    }
+    let session = sessions.get_mut(&req.room_id).expect("just inserted or already present");
+    let reply = session.process.send(&req.sender, &req.content).await?;
+    session.last_activity = std::time::Instant::now();
 
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    Ok(reply)
+}
+
+/// Periodically kills and removes any RoomSession that's been idle past
+/// the timeout, releasing its sidecar process. Spawned once at startup
+/// alongside the existing chronicle/archival background loops.
+async fn spawn_idle_reaper(room_sessions: Arc<tokio::sync::RwLock<HashMap<String, RoomSession>>>) {
+    const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+    const SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+    loop {
+        tokio::time::sleep(SWEEP_INTERVAL).await;
+        let mut sessions = room_sessions.write().await;
+        let idle_rooms: Vec<String> = sessions
+            .iter()
+            .filter(|(_, s)| s.is_idle(IDLE_TIMEOUT))
+            .map(|(room, _)| room.clone())
+            .collect();
+        for room in idle_rooms {
+            if let Some(mut session) = sessions.remove(&room) {
+                tracing::info!("reaping idle session for room {}", room);
+                session.process.kill();
+            }
+        }
+    }
 }
 
 async fn post_signal(state: &ListenState, content: &str) -> anyhow::Result<()> {
@@ -331,19 +443,13 @@ mod session_supervisor_tests {
 
     #[test]
     fn room_session_is_not_idle_when_recently_active() {
-        let session = RoomSession {
-            session_id: None,
-            last_activity: Instant::now(),
-        };
+        let session = RoomSession::for_test(Instant::now());
         assert!(!session.is_idle(Duration::from_secs(1800)));
     }
 
     #[test]
     fn room_session_is_idle_after_timeout_elapsed() {
-        let session = RoomSession {
-            session_id: None,
-            last_activity: Instant::now() - Duration::from_secs(1801),
-        };
+        let session = RoomSession::for_test(Instant::now() - Duration::from_secs(1801));
         assert!(session.is_idle(Duration::from_secs(1800)));
     }
 }
