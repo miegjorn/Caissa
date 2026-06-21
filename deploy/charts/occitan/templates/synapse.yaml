@@ -56,6 +56,9 @@ data:
 
     enable_registration: {{ .Values.synapse.enableRegistration }}
     enable_registration_without_verification: {{ .Values.synapse.enableRegistration }}
+    # Value lives in the 'synapse-registration-secret' k8s Secret (created out-of-band,
+    # same as 'openbao'/'anthropic') — never inlined into this ConfigMap.
+    registration_shared_secret_path: /secrets/registration-shared-secret
 
     {{- if .Values.charradissa.appservice.enabled }}
     # Enable once the charradissa appservice registration is provisioned onto /data
@@ -125,6 +128,9 @@ spec:
               readOnly: true
             - name: data
               mountPath: /data
+            - name: registration-secret
+              mountPath: /secrets
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /health
@@ -145,6 +151,9 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: synapse-media
+        - name: registration-secret
+          secret:
+            secretName: synapse-registration-secret
 ---
 apiVersion: v1
 kind: Service
