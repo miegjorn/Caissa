@@ -48,10 +48,10 @@ RUN npm install -g @anthropic-ai/claude-agent-sdk
 COPY agent-sidecar.js /usr/local/bin/agent-sidecar.js
 RUN chmod +x /usr/local/bin/agent-sidecar.js
 
-# Bake Superpowers so agent-sidecar.js's SDK sessions can discover and use
-# its skills (brainstorming, writing-plans, TDD, etc.) — the SDK discovers
-# skills via the filesystem, not a programmatic registration API.
-COPY superpowers-plugin/ /root/.claude/plugins/cache/claude-plugins-official/superpowers/
+# Skills/plugins (e.g. Superpowers) are deliberately NOT baked in yet — doing
+# so requires a real decision on how a CI runner (no local ~/.claude/plugins/)
+# provisions third-party plugin code at build time. Deferred; sidecar runs
+# with skills: [] until that's resolved. See Caissa Farga TODO.
 
 # The caissa binary — Guilhem's pod runs `caissa listen` (the event listener) and
 # the binary also drives chronicle runs. Without it the deployment can't start.

@@ -37,17 +37,10 @@ pub async fn run(generation: &str, fondament_path: Option<&str>) -> anyhow::Resu
         &build_dir.join("fondament_roles"),
     )?;
 
-    // Bake the Superpowers plugin so dispatched/Matrix sessions can use its
-    // skills (brainstorming, writing-plans, TDD, etc.) via the Agent SDK's
-    // filesystem-based skill discovery.
-    let superpowers_src = dirs::home_dir()
-        .expect("no home directory")
-        .join(".claude/plugins/cache/claude-plugins-official/superpowers");
-    if superpowers_src.exists() {
-        copy_dir_recursive(&superpowers_src, &build_dir.join("superpowers-plugin"))?;
-    } else {
-        eprintln!("[caissa] warning: superpowers plugin not found at {}, skipping", superpowers_src.display());
-    }
+    // Skills/plugins (e.g. Superpowers) are deliberately not baked into the
+    // image yet — see Dockerfile.agent's comment for why. The sidecar runs
+    // with skills: [] until a real decision is made on how a CI runner
+    // (no local ~/.claude/plugins/) provisions third-party plugin code.
 
     let tag = format!("caissa-sandbox:{}", generation);
     eprintln!("[caissa] building image: {}", tag);
@@ -77,24 +70,6 @@ fn copy_dir_into(src: &Path, dst: &Path) -> anyhow::Result<()> {
         let entry = entry?;
         if entry.file_type()?.is_file() {
             std::fs::copy(entry.path(), dst.join(entry.file_name()))?;
-        }
-    }
-    Ok(())
-}
-
-/// Recursively copy `src` into `dst`, creating directories as needed.
-/// Unlike `copy_dir_into`, this handles nested subdirectories — needed for
-/// the Superpowers plugin's skills/ directory structure.
-fn copy_dir_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        let dst_path = dst.join(entry.file_name());
-        if file_type.is_dir() {
-            copy_dir_recursive(&entry.path(), &dst_path)?;
-        } else if file_type.is_file() {
-            std::fs::copy(entry.path(), &dst_path)?;
         }
     }
     Ok(())

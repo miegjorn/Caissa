@@ -21,4 +21,3 @@ axum = { workspace = true }
 uuid = { workspace = true }
 kube = { workspace = true }
 k8s-openapi = { workspace = true }
-dirs = "5"
