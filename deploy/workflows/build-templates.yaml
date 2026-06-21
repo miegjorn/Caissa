@@ -16,9 +16,9 @@ spec:
     - name: build-and-push
       inputs:
         parameters:
-          - name: repo            # e.g. "https://github.com/bedardpl/Farga.git"
+          - name: repo            # e.g. "https://github.com/miegjorn/Farga.git"
           - name: service         # e.g. "farga"
-          - name: registry        # e.g. "ghcr.io/occitan"
+          - name: registry        # e.g. "ghcr.io/miegjorn"
           - name: git-revision
             default: "main"
       volumes:
@@ -89,7 +89,7 @@ spec:
       inputs:
         parameters:
           - name: generation      # e.g. "guilhem"
-          - name: registry        # e.g. "ghcr.io/occitan"
+          - name: registry        # e.g. "ghcr.io/miegjorn"
           - name: caissa-revision
             default: "main"
           - name: fondament-revision

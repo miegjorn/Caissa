@@ -24,7 +24,7 @@ enum Commands {
     Push {
         /// Generation name (e.g. "guilhem").
         generation: String,
-        /// Override the registry prefix (e.g. "ghcr.io/occitan").
+        /// Override the registry prefix (e.g. "ghcr.io/miegjorn").
         #[arg(long)]
         registry: Option<String>,
     },
