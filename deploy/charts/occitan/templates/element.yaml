@@ -10,8 +10,7 @@ data:
     {
       "default_server_config": {
         "m.homeserver": {
-          "base_url": {{ .Values.synapse.publicBaseurl | quote }},
-          "server_name": {{ .Values.synapse.serverName | quote }}
+          "base_url": {{ .Values.synapse.publicBaseurl | quote }}
         }
       },
       "disable_custom_urls": false,
