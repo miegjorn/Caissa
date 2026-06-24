@@ -81,6 +81,7 @@ metadata:
   labels:
     {{- include "occitan.labels" . | nindent 4 }}
 spec:
+  type: LoadBalancer
   selector:
     {{- include "occitan.selectorLabels" (dict "component" "element" "context" .) | nindent 4 }}
   ports:
