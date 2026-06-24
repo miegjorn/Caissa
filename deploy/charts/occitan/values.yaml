@@ -77,6 +77,25 @@ charradissa:
       type: none
     projects:
       autodiscover: false
+    agents:
+      # Default route — Guilhem handles all rooms that have no explicit route.
+      default: "http://guilhem.agents.svc.cluster.local:8080"
+      # Per-room routes → independent component agent pods (deploy/charts/component-agents).
+      routes:
+        - roomId: "!hNBIrYgqZxPsnBntbY:occitane.guilhem"
+          agentUrl: "http://gardian-agent.agents.svc.cluster.local:8080"
+        - roomId: "!yYNPBBfRcPAMfpyAeB:occitane.guilhem"
+          agentUrl: "http://fondament-agent.agents.svc.cluster.local:8080"
+        - roomId: "!kIDEzlMzVRRXveGVpL:occitane.guilhem"
+          agentUrl: "http://farga-agent.agents.svc.cluster.local:8080"
+        - roomId: "!AftizZpcNgfIUgqFQt:occitane.guilhem"
+          agentUrl: "http://amassada-agent.agents.svc.cluster.local:8080"
+        - roomId: "!SRtFNNEbgkATYOLktl:occitane.guilhem"
+          agentUrl: "http://cor-agent.agents.svc.cluster.local:8080"
+        - roomId: "!fquiGtdiWSOUyYhYUV:occitane.guilhem"
+          agentUrl: "http://caissa-agent.agents.svc.cluster.local:8080"
+        - roomId: "!tGdWTCTRPPXgnWrhad:occitane.guilhem"
+          agentUrl: "http://charradissa-agent.agents.svc.cluster.local:8080"
       # ANTHROPIC_API_KEY from 'anthropic' secret; MATRIX_AS_TOKEN from 'charradissa' secret.
 # ─── Synapse (Matrix homeserver) ─────────────────────────────────────────────
 synapse:

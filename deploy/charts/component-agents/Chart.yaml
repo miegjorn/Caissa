@@ -1,0 +1,9 @@
+apiVersion: v2
+name: component-agents
+description: |
+  Deploys the 7 Occitan component agent pods (amassada, caissa, charradissa,
+  cor, farga, fondament, gardian). Each agent runs caissa listen with only its
+  own component's Farga project context — independent, no org-level context.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

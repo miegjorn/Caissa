@@ -27,6 +27,16 @@ data:
 
     [projects]
     autodiscover = {{ .Values.charradissa.config.projects.autodiscover }}
+
+    # Per-room agent routing.  Default falls back to GUILHEM_URL env var.
+    # Each component room routes to its independent agent pod in the agents namespace.
+    [agents]
+    default = {{ .Values.charradissa.config.agents.default | quote }}
+
+    [agents.routes]
+    {{- range .Values.charradissa.config.agents.routes }}
+    {{ .roomId | quote }} = {{ .agentUrl | quote }}
+    {{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
