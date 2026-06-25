@@ -57,11 +57,6 @@ spec:
       labels:
         {{- include "occitan.selectorLabels" (dict "component" "charradissa" "context" .) | nindent 8 }}
     spec:
-      # The daemon reads CHARRADISSA_PORT for its listen port, which collides with
-      # the kubelet's legacy service-link env var (<SVCNAME>_PORT=tcp://ip:port).
-      # Disable service links so the daemon's "8448" default applies. (Code fix:
-      # rename the env var to a non-colliding name — tracked for the daemon rebuild.)
-      enableServiceLinks: false
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -78,6 +73,11 @@ spec:
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
+            # Listen port for the appservice webhook. Named CHARRADISSA_LISTEN_PORT
+            # (not CHARRADISSA_PORT) to avoid the kubelet service-link collision
+            # that previously forced enableServiceLinks: false (issue #10).
+            - name: CHARRADISSA_LISTEN_PORT
+              value: {{ .Values.charradissa.port | quote }}
             - name: ANTHROPIC_API_KEY
               valueFrom:
                 secretKeyRef:
