@@ -1,0 +1,35 @@
+# caissa binary image used for all component agent pods.
+# Same binary as Guilhem — only the Farga project context differs.
+image: ghcr.io/miegjorn/caissa-sandbox:guilhem-sha-7da7fd3
+
+imagePullSecrets:
+  - name: ghcr-creds
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+farga:
+  url: "http://farga.occitan-system.svc.cluster.local:7500"
+
+# One entry per Occitan component.
+# - name:   component identifier, becomes the Farga project and pod name
+# - roomId: Matrix room ID this agent inhabits (room already exists in Synapse)
+agents:
+  - name: gardian
+    roomId: "!hNBIrYgqZxPsnBntbY:occitane.guilhem"
+  - name: fondament
+    roomId: "!yYNPBBfRcPAMfpyAeB:occitane.guilhem"
+  - name: farga
+    roomId: "!kIDEzlMzVRRXveGVpL:occitane.guilhem"
+  - name: amassada
+    roomId: "!AftizZpcNgfIUgqFQt:occitane.guilhem"
+  - name: cor
+    roomId: "!SRtFNNEbgkATYOLktl:occitane.guilhem"
+  - name: caissa
+    roomId: "!fquiGtdiWSOUyYhYUV:occitane.guilhem"
+  - name: charradissa
+    roomId: "!tGdWTCTRPPXgnWrhad:occitane.guilhem"
