@@ -2,6 +2,107 @@
 # The pod runs a lightweight event listener (always on, ~0 cost).
 # Claude Code is only invoked when an event warrants a chronicle run.
 
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: guilhem
+  namespace: agents
+  labels:
+    app.kubernetes.io/name: guilhem
+    app.kubernetes.io/part-of: occitan
+---
+# Read access to all cluster resources (no secret values — that's the built-in view role).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: guilhem-view
+  labels:
+    app.kubernetes.io/name: guilhem
+    app.kubernetes.io/part-of: occitan
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - kind: ServiceAccount
+    name: guilhem
+    namespace: agents
+---
+# Write access in agents namespace (restart deployments, manage agent pods).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: guilhem-agents-write
+  namespace: agents
+  labels:
+    app.kubernetes.io/name: guilhem
+    app.kubernetes.io/part-of: occitan
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: guilhem-agents-write
+  namespace: agents
+  labels:
+    app.kubernetes.io/name: guilhem
+    app.kubernetes.io/part-of: occitan
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: guilhem-agents-write
+subjects:
+  - kind: ServiceAccount
+    name: guilhem
+    namespace: agents
+---
+# Write access in occitan-system namespace (restart services, read logs).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: guilhem-occitan-system-write
+  namespace: occitan-system
+  labels:
+    app.kubernetes.io/name: guilhem
+    app.kubernetes.io/part-of: occitan
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: guilhem-occitan-system-write
+  namespace: occitan-system
+  labels:
+    app.kubernetes.io/name: guilhem
+    app.kubernetes.io/part-of: occitan
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: guilhem-occitan-system-write
+subjects:
+  - kind: ServiceAccount
+    name: guilhem
+    namespace: agents
+---
+
 # caissa.toml — load_config() reads ./caissa.toml (cwd is /workspace). The FARGA_URL
 # env alone is ignored by the binary, so the listener needs this file to reach Farga.
 apiVersion: v1
@@ -51,11 +152,22 @@ spec:
         app.kubernetes.io/name: guilhem
         occitan/generation: guilhem
     spec:
+      serviceAccountName: guilhem
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       initContainers:
+        # Copy kubectl binary into a shared volume so Guilhem can run cluster commands.
+        # The ServiceAccount token is auto-mounted at /var/run/secrets/kubernetes.io/serviceaccount/
+        # and kubectl picks it up automatically via in-cluster config.
+        - name: install-kubectl
+          image: bitnami/kubectl:latest
+          imagePullPolicy: IfNotPresent
+          command: ["cp", "/opt/bitnami/kubectl/bin/kubectl", "/tools/kubectl"]
+          volumeMounts:
+            - name: tools
+              mountPath: /tools
         # Pull the GitHub/GitLab tokens from OpenBao into a shared creds volume so
         # Guilhem (and its claude subprocess) can use git/gh/glab. OpenBao stays the
         # source of truth; nothing is duplicated into a long-lived k8s secret.
@@ -114,6 +226,7 @@ spec:
             - |
               [ -f /creds/tokens.env ] && . /creds/tokens.env
               export GIT_CONFIG_GLOBAL=/creds/.gitconfig
+              export PATH="/tools:$PATH"
               exec caissa listen --port 8080
           env:
             - name: FARGA_URL
@@ -133,6 +246,9 @@ spec:
               readOnly: true
             - name: creds
               mountPath: /creds
+            - name: tools
+              mountPath: /tools
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /health
@@ -148,6 +264,8 @@ spec:
         - name: creds
           emptyDir:
             medium: Memory
+        - name: tools
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
