@@ -352,22 +352,23 @@ async fn handle_matrix_reply(
     }
 }
 
-/// Assemble the system prompt for a Matrix reply session using the Fondament
-/// resolver path for `fondament/guilhem+deconstructive`.
+/// Assemble the system prompt and skills for a Matrix reply session using the
+/// Fondament resolver path for `fondament/guilhem+deconstructive`.
 ///
-/// Loads the guilhem role definition from Fondament (baked into the image at
-/// /fondament), prepends the deconstructive discipline preamble (which instructs
-/// multi-voice decomposition before collapse), and appends the room context so
-/// the sidecar knows which conversation it's in.
+/// Returns `(system_prompt, skills)`. Skills come from the role definition's
+/// `skills:` list; they are empty if the definition is missing or declares none.
+/// The supply-chain decision for vendoring skills into the image is tracked in
+/// Caissa#13 — the path is wired here so that decision doesn't require a code
+/// change, only an image change.
 ///
 /// Falls back to a bare prompt if the definition file is missing (e.g. outside
 /// the built image, in local dev without a Fondament checkout at fondament_path).
-fn resolve_guilhem_prompt(fondament_path: &str, generation: &str, room_id: &str) -> String {
-    let role_context = match load_fondament_def(fondament_path, generation) {
-        Ok(def) => def.context,
+fn resolve_guilhem_prompt(fondament_path: &str, generation: &str, room_id: &str) -> (String, Vec<String>) {
+    let (role_context, skills) = match load_fondament_def(fondament_path, generation) {
+        Ok(def) => (def.context, def.skills),
         Err(e) => {
             tracing::warn!("fondament def not found for '{}' at '{}': {}; using bare prompt", generation, fondament_path, e);
-            format!("You are Guilhem, the org agent for the Occitan stack.")
+            (String::from("You are Guilhem, the org agent for the Occitan stack."), vec![])
         }
     };
 
@@ -387,12 +388,13 @@ Your public response reflects the recomposed whole.\n\
 The internal debate is yours alone — it does not appear in output.\n\
 --- end injection ---";
 
-    format!(
+    let prompt = format!(
         "{}\n\n{}\n\nYou are replying in Matrix room {}.",
         deconstructive_preamble,
         role_context.trim_end(),
         room_id,
-    )
+    );
+    (prompt, skills)
 }
 
 async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::Result<String> {
@@ -430,12 +432,12 @@ async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::
             "mcp__dispatcher__list_agent_specs".to_string(),
         ];
 
-        let system_prompt = resolve_guilhem_prompt(&state.fondament_path, &state.generation, &req.room_id);
+        let (system_prompt, skills) = resolve_guilhem_prompt(&state.fondament_path, &state.generation, &req.room_id);
         let init = SidecarInit {
             system_prompt,
             model: state.matrix_model.clone(),
             allowed_tools,
-            skills: vec![], // populated from the resolved facet's `skills` list by the caller; empty until Fondament-resolver wiring exists (out of scope, matches tools.always_on's existing manual-relay model)
+            skills,
             mcp_servers,
         };
 

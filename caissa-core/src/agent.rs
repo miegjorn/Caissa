@@ -9,6 +9,8 @@ pub struct FondamentDef {
     pub kind: String,
     pub default_model: Option<String>,
     pub context: String,
+    #[serde(default)]
+    pub skills: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
