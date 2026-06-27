@@ -2,6 +2,9 @@
 # Image is built by: caissa build guilhem
 
 image: ghcr.io/miegjorn/caissa-sandbox:guilhem-sha-7da7fd3 # CI writes sha-tagged value here
+# Lean CLI image for sidecars that only need the caissa binary (no agent sandbox).
+# CI keeps this current with every push to Caissa main.
+caissaImage: ghcr.io/miegjorn/caissa:latest
 imagePullSecrets:
   - name: ghcr-creds
 # caissa listen is implemented — Guilhem is alive (event listener, ~0 idle cost).

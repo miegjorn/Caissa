@@ -266,7 +266,7 @@ spec:
         # Runs caissa watch in a loop; on anomaly writes a bug-signal to Farga.
         # Independent of the main guilhem process — survives crashes of the listen loop.
         - name: sre-watchdog
-          image: {{ .Values.image }}
+          image: {{ .Values.caissaImage }}
           imagePullPolicy: Always
           command: ["caissa", "watch"]
           env:
