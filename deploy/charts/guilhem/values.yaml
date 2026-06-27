@@ -22,6 +22,12 @@ sre:
   # Matrix room ID to post alerts to. Empty = alerting disabled.
   # Set to a real room ID (e.g. !abc123:occitane.guilhem) to enable.
   matrixRoomId: ""
+
+backlog:
+  # Cron schedule for the backlog review run (weekly by default).
+  reviewSchedule: "0 9 * * 1"  # Monday 09:00 America/Toronto
+  # Matrix room ID to post the backlog review summary to. Empty = posting disabled.
+  matrixRoomId: ""
 resources:
   requests:
     cpu: 50m

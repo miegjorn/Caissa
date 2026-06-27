@@ -1,0 +1,43 @@
+# CronWorkflow — Backlog review (Caissa#14).
+# Triggers Guilhem's /trigger/backlog-review endpoint on a weekly schedule.
+# Guilhem reads open GitHub issues across all miegjorn repos, applies staleness
+# heuristics (stale >14d, no Epic parent, orphan Epics, unowned blockers),
+# synthesizes a backlog review, writes it to Farga, and optionally posts a
+# summary to the configured Matrix room.
+#
+# Cadence: Monday 09:00 America/Toronto (see guilhem/values.yaml backlog.reviewSchedule).
+
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: guilhem-backlog-review
+  namespace: argo
+  labels:
+    app.kubernetes.io/part-of: occitan
+    occitan/generation: guilhem
+spec:
+  schedule: "0 9 * * 1"
+  timezone: "America/Toronto"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600    # wide window — if cluster was down Monday morning, skip
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 3
+
+  workflowSpec:
+    entrypoint: trigger-backlog-review
+    templates:
+      - name: trigger-backlog-review
+        steps:
+          - - name: notify-guilhem
+              template: http-trigger
+
+      - name: http-trigger
+        http:
+          url: "http://guilhem.agents.svc.cluster.local:8080/trigger/backlog-review"
+          method: POST
+          headers:
+            - name: Content-Type
+              value: application/json
+          body: '{"reason":"scheduled weekly backlog review"}'
+          successCondition: "response.statusCode == 202"
+          timeoutSeconds: 30

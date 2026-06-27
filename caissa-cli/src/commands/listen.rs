@@ -37,6 +37,8 @@ struct ListenState {
     generation: String,
     /// Matrix room ID for SRE alert posts. Empty string = alerting disabled.
     sre_matrix_room_id: String,
+    /// Matrix room ID for backlog review posts. Empty string = posting disabled.
+    backlog_matrix_room_id: String,
     /// One persistent agent-sidecar.js child process per actively-chatting
     /// Matrix room. Reaped by an idle-timeout sweep (see spawn_idle_reaper).
     room_sessions: Arc<tokio::sync::RwLock<HashMap<String, RoomSession>>>,
@@ -191,6 +193,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         fondament_path: config.fondament_path,
         generation: config.generation,
         sre_matrix_room_id: std::env::var("SRE_MATRIX_ROOM_ID").unwrap_or_default(),
+        backlog_matrix_room_id: std::env::var("BACKLOG_MATRIX_ROOM_ID").unwrap_or_default(),
         room_sessions: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
     });
 
@@ -199,6 +202,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
     let app = Router::new()
         .route("/trigger/chronicle", post(handle_chronicle))
         .route("/trigger/sre-alert", post(handle_sre_alert))
+        .route("/trigger/backlog-review", post(handle_backlog_review))
         .route("/matrix/reply", post(handle_matrix_reply))
         .route("/health", axum::routing::get(|| async { "ok" }))
         .with_state(state);
@@ -376,6 +380,158 @@ async fn run_chronicle(state: &ListenState, prompt: &str) -> anyhow::Result<()> 
     }
 
     Ok(())
+}
+
+// ── Backlog review ────────────────────────────────────────────────────────────
+
+/// POST /trigger/backlog-review — CronWorkflow-triggered (weekly).
+///
+/// Guilhem reads open GitHub issues across miegjorn repos via gh CLI, applies
+/// staleness heuristics, synthesizes a backlog review, and writes it to Farga.
+/// If BACKLOG_MATRIX_ROOM_ID is set, also posts a summary to that Matrix room.
+async fn handle_backlog_review(
+    State(state): State<Arc<ListenState>>,
+    Json(req): Json<TriggerReq>,
+) -> StatusCode {
+    tracing::info!("backlog-review trigger received: {}", req.reason);
+
+    tokio::spawn(async move {
+        match run_backlog_review(&state).await {
+            Ok(_) => tracing::info!("backlog-review complete"),
+            Err(e) => tracing::error!("backlog-review failed: {}", e),
+        }
+    });
+
+    StatusCode::ACCEPTED
+}
+
+async fn run_backlog_review(state: &ListenState) -> anyhow::Result<()> {
+    let mcp_config = format!(
+        r#"{{"mcpServers":{{"farga":{{"type":"http","url":"{}"}}}}}}"#,
+        state.farga_mcp_url
+    );
+    let mcp_path = std::env::temp_dir().join("guilhem-backlog-mcp.json");
+    std::fs::write(&mcp_path, &mcp_config)?;
+
+    let prompt = build_backlog_review_prompt(&state.farga_project);
+
+    let output = tokio::process::Command::new("claude")
+        .args([
+            "--print",
+            &prompt,
+            "--model",
+            &state.matrix_model,
+            "--mcp-config",
+            mcp_path.to_str().unwrap(),
+            "--allowed-tools",
+            "Bash,mcp__farga__search_signals,mcp__farga__read_context,mcp__farga__write_signal",
+        ])
+        .env("FARGA_URL", &state.farga_url)
+        .env("FARGA_PROJECT", &state.farga_project)
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("backlog-review claude exited with error: {}", stderr);
+    }
+
+    let review = String::from_utf8_lossy(&output.stdout).to_string();
+
+    if review.trim().is_empty() {
+        tracing::warn!("backlog-review: empty output from claude");
+        return Ok(());
+    }
+
+    // Write to Farga
+    post_signal(state, &review).await?;
+    tracing::info!("backlog-review written to Farga");
+
+    // Post to Matrix if configured
+    if !state.backlog_matrix_room_id.is_empty() {
+        let synapse_url = std::env::var("SYNAPSE_URL")
+            .unwrap_or_else(|_| "http://synapse.occitan-system.svc.cluster.local:8008".into());
+        let admin_token = std::env::var("SYNAPSE_ADMIN_TOKEN").unwrap_or_default();
+
+        if admin_token.is_empty() {
+            tracing::warn!("backlog-review: SYNAPSE_ADMIN_TOKEN not set — skipping Matrix post");
+            return Ok(());
+        }
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()?;
+
+        // Truncate to a readable Matrix summary (first 2000 chars)
+        let summary = if review.len() > 2000 {
+            format!("{}…\n\n(full review written to Farga)", &review[..2000])
+        } else {
+            review.clone()
+        };
+
+        let txn = uuid::Uuid::new_v4();
+        let matrix_url = format!(
+            "{}/_matrix/client/v3/rooms/{}/send/m.room.message/{}",
+            synapse_url, state.backlog_matrix_room_id, txn
+        );
+
+        client
+            .put(&matrix_url)
+            .bearer_auth(&admin_token)
+            .json(&serde_json::json!({ "msgtype": "m.text", "body": summary }))
+            .send()
+            .await?
+            .error_for_status()?;
+
+        tracing::info!("backlog-review posted to Matrix room {}", state.backlog_matrix_room_id);
+    }
+
+    Ok(())
+}
+
+fn build_backlog_review_prompt(project: &str) -> String {
+    format!(
+        r#"You are Guilhem de Tudela, org agent for the Occitan stack. This is a scheduled
+backlog review run for the miegjorn GitHub organisation.
+
+## What to do
+
+1. **Fetch open issues** across all miegjorn repos using Bash:
+   ```
+   gh issue list --repo miegjorn/Caissa --state open --json number,title,createdAt,updatedAt,labels,body --limit 100
+   gh issue list --repo miegjorn/Farga --state open --json number,title,createdAt,updatedAt,labels,body --limit 100
+   gh issue list --repo miegjorn/Fondament --state open --json number,title,createdAt,updatedAt,labels,body --limit 100
+   gh issue list --repo miegjorn/Gardian --state open --json number,title,createdAt,updatedAt,labels,body --limit 100
+   gh issue list --repo miegjorn/Amassada --state open --json number,title,createdAt,updatedAt,labels,body --limit 100
+   gh issue list --repo miegjorn/Charradissa --state open --json number,title,createdAt,updatedAt,labels,body --limit 100
+   gh issue list --repo miegjorn/Cor --state open --json number,title,createdAt,updatedAt,labels,body --limit 100
+   ```
+
+2. **Apply staleness heuristics** — flag each of the following explicitly:
+   - Issues open **>14 days with no update** (updatedAt older than 14 days ago)
+   - Issues with **no Epic parent** (no "Parent Epic" mention in body, not labelled as an Epic itself)
+   - **Epics with no open sub-issues** (issues labelled Epic or titled "Epic:" with no referenced open child issues)
+   - Issues with **no assignee and no recent activity** — potential blockers without owners
+
+3. **Read Farga context** for recent signals (project: "{project}") to connect backlog state
+   to what the stack has been doing lately.
+
+4. **Synthesize** a concise backlog review:
+   - Count open issues per repo
+   - List flagged items (stale, orphan, blocked) with issue numbers
+   - Note any priority drift — issues that should be moving but aren't
+   - Note any structural gaps — missing Epics, issues with no clear parent
+
+5. **Write the review to Farga** using mcp__farga__write_signal with:
+   - project: "{project}"
+   - source: "backlog-review"
+   - content: your full synthesis
+
+Your written response IS the review — keep it crisp and actionable, not exhaustive.
+Today's date is available via `date` in Bash.
+"#,
+        project = project
+    )
 }
 
 // ── Matrix reply ──────────────────────────────────────────────────────────────

@@ -252,6 +252,8 @@ spec:
           env:
             - name: SRE_MATRIX_ROOM_ID
               value: {{ .Values.sre.matrixRoomId | quote }}
+            - name: BACKLOG_MATRIX_ROOM_ID
+              value: {{ .Values.backlog.matrixRoomId | quote }}
           readinessProbe:
             httpGet:
               path: /health
