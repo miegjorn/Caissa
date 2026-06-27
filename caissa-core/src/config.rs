@@ -40,6 +40,17 @@ pub struct CaissaConfig {
     /// so WebSocket subscribers get cross-session visibility.
     #[serde(default = "default_amassada_url")]
     pub amassada_url: String,
+    /// SRE watchdog: how long to wait for a /health response before counting it as a failure.
+    #[serde(default = "default_sre_health_timeout_secs")]
+    pub sre_health_timeout_secs: u64,
+    /// SRE watchdog: how often to run a full probe sweep (seconds).
+    #[serde(default = "default_sre_watchdog_interval_secs")]
+    pub sre_watchdog_interval_secs: u64,
+    /// SRE watchdog: maximum expected age of the last Farga chronicle signal (hours).
+    /// Used to detect a stalled chronicle cron. Requires Farga to return signal timestamps
+    /// (not yet implemented — field is reserved, check is currently skipped).
+    #[serde(default = "default_sre_chronicle_max_age_hours")]
+    pub sre_chronicle_max_age_hours: u64,
 }
 
 fn default_fondament_path() -> String {
@@ -70,6 +81,10 @@ fn default_amassada_url() -> String {
     "http://amassada.occitan-system.svc.cluster.local:7600".into()
 }
 
+fn default_sre_health_timeout_secs() -> u64 { 10 }
+fn default_sre_watchdog_interval_secs() -> u64 { 300 }
+fn default_sre_chronicle_max_age_hours() -> u64 { 7 }
+
 impl Default for CaissaConfig {
     fn default() -> Self {
         Self {
@@ -85,6 +100,9 @@ impl Default for CaissaConfig {
             chronicle_model: default_chronicle_model(),
             matrix_model: default_matrix_model(),
             amassada_url: default_amassada_url(),
+            sre_health_timeout_secs: default_sre_health_timeout_secs(),
+            sre_watchdog_interval_secs: default_sre_watchdog_interval_secs(),
+            sre_chronicle_max_age_hours: default_sre_chronicle_max_age_hours(),
         }
     }
 }

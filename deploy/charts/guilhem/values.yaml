@@ -18,8 +18,13 @@ farga:
 chronicleSchedule: "0 */6 * * *" # every 6 hours
 
 sre:
+  # How long to wait for a /health response before counting it as a failure (seconds).
+  healthTimeoutSecs: 10
   # How often the no-LLM watchdog probes services (seconds).
   watchdogIntervalSecs: 300
+  # Maximum expected age of the last chronicle signal (hours).
+  # Reserved — check is deferred until Farga exposes signal timestamps.
+  chronicleMaxAgeHours: 7
   # How often the LLM alert layer checks for watchdog signals and posts to Matrix.
   alertSchedule: "*/30 * * * *"
   # Matrix room ID to post alerts to. Empty = alerting disabled.

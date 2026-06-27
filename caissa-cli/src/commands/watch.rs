@@ -20,10 +20,14 @@ pub async fn run() -> anyhow::Result<()> {
 
     let farga_url = std::env::var("FARGA_URL").unwrap_or(config.farga_url.clone());
     let project = std::env::var("WATCHDOG_PROJECT").unwrap_or(config.project.clone());
+    // Env overrides take precedence over caissa.toml for k8s deployments.
     let interval_secs: u64 = std::env::var("WATCHDOG_INTERVAL_SECS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(300);
+        .ok().and_then(|v| v.parse().ok())
+        .unwrap_or(config.sre_watchdog_interval_secs);
+    let health_timeout_secs: u64 = std::env::var("HEALTH_TIMEOUT_SECS")
+        .ok().and_then(|v| v.parse().ok())
+        .unwrap_or(config.sre_health_timeout_secs);
+    let chronicle_max_age_hours = config.sre_chronicle_max_age_hours;
 
     let services: Vec<(&str, String)> = vec![
         ("gardian",     std::env::var("GARDIAN_URL").unwrap_or_else(|_| "http://gardian.occitan-system.svc.cluster.local:7400".into())),
@@ -34,10 +38,16 @@ pub async fn run() -> anyhow::Result<()> {
         ("dispatcher",  std::env::var("DISPATCHER_URL").unwrap_or_else(|_| "http://dispatcher.agents.svc.cluster.local:9090".into())),
     ];
 
-    tracing::info!("sre-watchdog starting — interval {}s, project {}", interval_secs, project);
+    tracing::info!(
+        "sre-watchdog starting — interval {}s, health_timeout {}s, chronicle_max_age {}h, project {}",
+        interval_secs, health_timeout_secs, chronicle_max_age_hours, project
+    );
+    // chronicle_max_age_hours is reserved — check requires Farga to return signal timestamps,
+    // which the current /signals/recent endpoint does not. Filed against Farga.
+    tracing::info!("note: chronicle_max_age check deferred — Farga timestamp API not yet available");
 
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(health_timeout_secs))
         .build()?;
 
     loop {

@@ -331,6 +331,15 @@ read tools before writing:
 - read_context (project: "{project}") — accumulated project context
 - list_projects — what projects exist
 
+**SRE watchdog check** — before writing your chronicle, scan recent signals for any
+with source "sre-watchdog". These are mechanical health alerts written by the no-LLM
+watchdog when it detected an anomaly (unreachable service, missing signals, etc.).
+If watchdog signals are present:
+- Name each anomaly explicitly in your chronicle
+- Assess whether it is still active or has self-resolved
+- Note whether the SRE alert layer has already been triggered (source "sre-alert")
+If no watchdog signals: note "watchdog: all clear" in one line and move on.
+
 Then write a concise chronicle entry: what happened, what it means for the trajectory,
 what is now different from before. Your written response IS the chronicle — it is
 recorded to Farga automatically, so do not try to post it yourself.

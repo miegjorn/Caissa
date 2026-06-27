@@ -127,6 +127,11 @@ data:
     # Override: CHRONICLE_MODEL env or set chronicle_model here for a different model.
     chronicle_model = "claude-haiku-4-5-20251001"
 
+    # SRE watchdog thresholds (Caissa#15)
+    sre_health_timeout_secs = {{ .Values.sre.healthTimeoutSecs }}
+    sre_watchdog_interval_secs = {{ .Values.sre.watchdogIntervalSecs }}
+    sre_chronicle_max_age_hours = {{ .Values.sre.chronicleMaxAgeHours }}
+
     [sandbox]
     image = "caissa-sandbox:latest"
     network = "none"
@@ -274,12 +279,15 @@ spec:
               value: {{ .Values.farga.url | quote }}
             - name: WATCHDOG_PROJECT
               value: {{ .Values.farga.project | quote }}
-            - name: WATCHDOG_INTERVAL_SECS
-              value: {{ .Values.sre.watchdogIntervalSecs | quote }}
             - name: GUILHEM_URL
               value: "http://guilhem.agents.svc.cluster.local:8080"
             - name: DISPATCHER_URL
               value: "http://dispatcher.agents.svc.cluster.local:9090"
+          volumeMounts:
+            - name: caissa-config
+              mountPath: /workspace/caissa.toml
+              subPath: caissa.toml
+              readOnly: true
           resources:
             requests:
               cpu: 5m
