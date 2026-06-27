@@ -33,17 +33,17 @@ echo "[occitan] waiting for critical pods to be ready..."
 kubectl --context kind-occitan wait pod \
     -n occitan-system \
     -l app.kubernetes.io/component=synapse \
-    --for=condition=Ready --timeout=120s 2>/dev/null && echo "[occitan] synapse ready" || echo "[occitan] synapse timeout (continuing)"
+    --for=condition=Ready --timeout=180s 2>/dev/null && echo "[occitan] synapse ready" || echo "[occitan] synapse timeout (continuing)"
 
 kubectl --context kind-occitan wait pod \
     -n occitan-system \
     -l app.kubernetes.io/component=charradissa \
-    --for=condition=Ready --timeout=60s 2>/dev/null && echo "[occitan] charradissa ready" || echo "[occitan] charradissa timeout (continuing)"
+    --for=condition=Ready --timeout=180s 2>/dev/null && echo "[occitan] charradissa ready" || echo "[occitan] charradissa timeout (continuing)"
 
 kubectl --context kind-occitan wait pod \
     -n agents \
     -l app.kubernetes.io/name=guilhem \
-    --for=condition=Ready --timeout=60s 2>/dev/null && echo "[occitan] guilhem ready" || echo "[occitan] guilhem timeout (continuing)"
+    --for=condition=Ready --timeout=180s 2>/dev/null && echo "[occitan] guilhem ready" || echo "[occitan] guilhem timeout (continuing)"
 
 echo "[occitan] reloading port-forward LaunchAgents..."
 launchctl unload ~/Library/LaunchAgents/occitan.portforward.synapse.plist 2>/dev/null || true
