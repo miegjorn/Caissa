@@ -123,6 +123,37 @@ spec:
       labels:
         {{- include "occitan.selectorLabels" (dict "component" "synapse" "context" .) | nindent 8 }}
     spec:
+      {{- if .Values.charradissa.appservice.enabled }}
+      initContainers:
+        - name: generate-registration
+          image: {{ .Values.charradissa.image }}:{{ .Values.charradissa.imageTag }}
+          imagePullPolicy: Always
+          command:
+            - sh
+            - -c
+            - charradissa-daemon --generate-registration > /data/charradissa-registration.yaml
+          env:
+            - name: CHARRADISSA_CONFIG
+              value: /config/charradissa.toml
+            - name: CHARRADISSA_URL
+              value: "http://charradissa:{{ .Values.charradissa.port }}"
+            - name: MATRIX_AS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: charradissa
+                  key: as-token
+            - name: MATRIX_HS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: charradissa
+                  key: as-token
+          volumeMounts:
+            - name: charradissa-config
+              mountPath: /config
+              readOnly: true
+            - name: data
+              mountPath: /data
+      {{- end }}
       containers:
         - name: synapse
           image: {{ .Values.synapse.image }}
@@ -166,6 +197,11 @@ spec:
         - name: registration-secret
           secret:
             secretName: synapse-registration-secret
+        {{- if .Values.charradissa.appservice.enabled }}
+        - name: charradissa-config
+          configMap:
+            name: charradissa-config
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

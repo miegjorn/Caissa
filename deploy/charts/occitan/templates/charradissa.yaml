@@ -88,6 +88,11 @@ spec:
                 secretKeyRef:
                   name: charradissa
                   key: as-token
+            - name: MATRIX_HS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: charradissa
+                  key: as-token
             - name: FARGA_URL
               value: "http://farga:{{ .Values.farga.port }}"
           volumeMounts:
