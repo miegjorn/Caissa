@@ -1,58 +1,21 @@
 # ArgoCD resource limits for local kind deployment.
 # ArgoCD installs without any limits by default, leading to OOM kills under
-# kind node memory pressure. Apply after any ArgoCD reinstall:
-#   kubectl apply -f deploy/argocd/resource-limits.yaml
+# kind node memory pressure. Apply after any ArgoCD reinstall with:
 #
-# Values are conservative for a dev cluster (Colima 16GB, kind single-node).
-# Scale up if ArgoCD becomes sluggish on larger repos.
+#   bash deploy/argocd/resource-limits.yaml
+#
+# (This file is a shell script disguised with a .yaml extension so it lives
+# alongside the other ArgoCD manifests. kubectl apply doesn't work for
+# partial Deployment specs — kubectl patch json is the right tool here.)
 
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: argocd-repo-server
-  namespace: argocd
-spec:
-  template:
-    spec:
-      containers:
-        - name: argocd-repo-server
-          resources:
-            requests:
-              cpu: 50m
-              memory: 128Mi
-            limits:
-              memory: 512Mi
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: argocd-server
-  namespace: argocd
-spec:
-  template:
-    spec:
-      containers:
-        - name: argocd-server
-          resources:
-            requests:
-              cpu: 50m
-              memory: 64Mi
-            limits:
-              memory: 256Mi
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: argocd-application-controller
-  namespace: argocd
-spec:
-  template:
-    spec:
-      containers:
-        - name: argocd-application-controller
-          resources:
-            requests:
-              cpu: 50m
-              memory: 128Mi
-            limits:
-              memory: 512Mi
+set -e
+kubectl patch deployment argocd-repo-server -n argocd --type=json \
+  -p='[{"op":"add","path":"/spec/template/spec/containers/0/resources","value":{"requests":{"cpu":"50m","memory":"128Mi"},"limits":{"memory":"512Mi"}}}]'
+
+kubectl patch deployment argocd-server -n argocd --type=json \
+  -p='[{"op":"add","path":"/spec/template/spec/containers/0/resources","value":{"requests":{"cpu":"50m","memory":"64Mi"},"limits":{"memory":"256Mi"}}}]'
+
+kubectl patch statefulset argocd-application-controller -n argocd --type=json \
+  -p='[{"op":"add","path":"/spec/template/spec/containers/0/resources","value":{"requests":{"cpu":"50m","memory":"128Mi"},"limits":{"memory":"512Mi"}}}]'
+
+echo "ArgoCD resource limits applied."
