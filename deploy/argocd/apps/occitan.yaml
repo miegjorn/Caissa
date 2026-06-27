@@ -38,3 +38,10 @@ spec:
       name: synapse-signing-key
       jsonPointers:
         - /data
+    # Kubernetes auto-adds volumeMode: Filesystem to StatefulSet PVC templates.
+    # Helm template doesn't set it → ArgoCD sees permanent false drift.
+    - group: apps
+      kind: StatefulSet
+      name: occitan-postgresql
+      jqPathExpressions:
+        - .spec.volumeClaimTemplates[]?.spec.volumeMode

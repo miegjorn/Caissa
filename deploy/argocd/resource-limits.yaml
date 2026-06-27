@@ -1,0 +1,58 @@
+# ArgoCD resource limits for local kind deployment.
+# ArgoCD installs without any limits by default, leading to OOM kills under
+# kind node memory pressure. Apply after any ArgoCD reinstall:
+#   kubectl apply -f deploy/argocd/resource-limits.yaml
+#
+# Values are conservative for a dev cluster (Colima 16GB, kind single-node).
+# Scale up if ArgoCD becomes sluggish on larger repos.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: argocd-repo-server
+  namespace: argocd
+spec:
+  template:
+    spec:
+      containers:
+        - name: argocd-repo-server
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: argocd-server
+  namespace: argocd
+spec:
+  template:
+    spec:
+      containers:
+        - name: argocd-server
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: argocd-application-controller
+  namespace: argocd
+spec:
+  template:
+    spec:
+      containers:
+        - name: argocd-application-controller
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
