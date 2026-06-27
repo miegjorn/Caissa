@@ -35,6 +35,8 @@ struct ListenState {
     dispatcher_mcp_url: String,
     fondament_path: String,
     generation: String,
+    /// Matrix room ID for SRE alert posts. Empty string = alerting disabled.
+    sre_matrix_room_id: String,
     /// One persistent agent-sidecar.js child process per actively-chatting
     /// Matrix room. Reaped by an idle-timeout sweep (see spawn_idle_reaper).
     room_sessions: Arc<tokio::sync::RwLock<HashMap<String, RoomSession>>>,
@@ -188,6 +190,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         dispatcher_mcp_url: config.dispatcher_mcp_url,
         fondament_path: config.fondament_path,
         generation: config.generation,
+        sre_matrix_room_id: std::env::var("SRE_MATRIX_ROOM_ID").unwrap_or_default(),
         room_sessions: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
     });
 
@@ -195,6 +198,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/trigger/chronicle", post(handle_chronicle))
+        .route("/trigger/sre-alert", post(handle_sre_alert))
         .route("/matrix/reply", post(handle_matrix_reply))
         .route("/health", axum::routing::get(|| async { "ok" }))
         .with_state(state);
@@ -225,6 +229,89 @@ async fn handle_chronicle(
     });
 
     StatusCode::ACCEPTED
+}
+
+/// POST /trigger/sre-alert — CronWorkflow-triggered (every 30min).
+///
+/// Fetches recent bug-signals written by the sre-watchdog from Farga.
+/// If any are found and SRE_MATRIX_ROOM_ID is configured, posts a
+/// formatted alert directly to the Matrix room using the SYNAPSE_ADMIN_TOKEN
+/// and SYNAPSE_URL that the initContainer injects at pod startup.
+/// Silent (202, no Matrix post) when all-clear or alerting is not configured.
+async fn handle_sre_alert(
+    State(state): State<Arc<ListenState>>,
+    Json(req): Json<TriggerReq>,
+) -> StatusCode {
+    tracing::info!("sre-alert trigger received: {}", req.reason);
+
+    let state_clone = Arc::clone(&state);
+    tokio::spawn(async move {
+        if let Err(e) = run_sre_alert(&state_clone).await {
+            tracing::error!("sre-alert run failed: {}", e);
+        }
+    });
+
+    StatusCode::ACCEPTED
+}
+
+async fn run_sre_alert(state: &ListenState) -> anyhow::Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+
+    // Fetch recent signals — filter for watchdog bug-signals
+    let url = format!("{}/signals/recent?project={}", state.farga_url, state.farga_project);
+    let signals: Vec<serde_json::Value> = client.get(&url).send().await?.json().await.unwrap_or_default();
+
+    let watchdog_signals: Vec<&str> = signals
+        .iter()
+        .filter(|s| s["source"].as_str() == Some("sre-watchdog"))
+        .filter_map(|s| s["content"].as_str())
+        .collect();
+
+    if watchdog_signals.is_empty() {
+        tracing::info!("sre-alert: all clear — no watchdog signals");
+        return Ok(());
+    }
+
+    let alert_body = format!(
+        "⚠️ SRE watchdog alert ({} issue(s) detected):\n\n{}",
+        watchdog_signals.len(),
+        watchdog_signals.join("\n\n---\n\n")
+    );
+
+    tracing::warn!("sre-alert: {} watchdog signal(s) found — posting to Matrix", watchdog_signals.len());
+
+    if state.sre_matrix_room_id.is_empty() {
+        tracing::warn!("sre-alert: SRE_MATRIX_ROOM_ID not set — alert not posted to Matrix");
+        return Ok(());
+    }
+
+    let synapse_url = std::env::var("SYNAPSE_URL")
+        .unwrap_or_else(|_| "http://synapse.occitan-system.svc.cluster.local:8008".into());
+    let admin_token = std::env::var("SYNAPSE_ADMIN_TOKEN").unwrap_or_default();
+
+    if admin_token.is_empty() {
+        tracing::error!("sre-alert: SYNAPSE_ADMIN_TOKEN not set — cannot post Matrix alert");
+        return Ok(());
+    }
+
+    let txn = uuid::Uuid::new_v4();
+    let matrix_url = format!(
+        "{}/_matrix/client/v3/rooms/{}/send/m.room.message/{}",
+        synapse_url, state.sre_matrix_room_id, txn
+    );
+
+    client
+        .put(&matrix_url)
+        .bearer_auth(&admin_token)
+        .json(&serde_json::json!({ "msgtype": "m.text", "body": alert_body }))
+        .send()
+        .await?
+        .error_for_status()?;
+
+    tracing::info!("sre-alert posted to Matrix room {}", state.sre_matrix_room_id);
+    Ok(())
 }
 
 fn build_chronicle_prompt(reason: &str, project: &str) -> String {

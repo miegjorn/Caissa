@@ -1,0 +1,42 @@
+# CronWorkflow — SRE alert layer (Caissa#26).
+# Triggers Guilhem's /trigger/sre-alert endpoint on a schedule.
+# Guilhem reads bug-signals written by the sre-watchdog sidecar and posts
+# a formatted alert to the configured Matrix room if anomalies are found.
+# Silent when all-clear or when SRE_MATRIX_ROOM_ID is not set.
+#
+# Cadence: every 30 minutes by default (see guilhem/values.yaml sre.alertSchedule).
+
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: guilhem-sre-alert
+  namespace: argo
+  labels:
+    app.kubernetes.io/part-of: occitan
+    occitan/generation: guilhem
+spec:
+  schedule: "*/30 * * * *"
+  timezone: "America/Toronto"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 3
+
+  workflowSpec:
+    entrypoint: trigger-sre-alert
+    templates:
+      - name: trigger-sre-alert
+        steps:
+          - - name: notify-guilhem
+              template: http-trigger
+
+      - name: http-trigger
+        http:
+          url: "http://guilhem.agents.svc.cluster.local:8080/trigger/sre-alert"
+          method: POST
+          headers:
+            - name: Content-Type
+              value: application/json
+          body: '{"reason":"scheduled sre alert check — every 30 minutes"}'
+          successCondition: "response.statusCode == 202"
+          timeoutSeconds: 30

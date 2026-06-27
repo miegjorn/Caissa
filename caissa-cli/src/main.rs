@@ -83,6 +83,11 @@ enum Commands {
         #[arg(long, default_value = "default")]
         project: String,
     },
+    /// Run the SRE watchdog — no-LLM health probe loop.
+    /// Checks /health on all stack services and Farga signal presence.
+    /// Writes a bug-signal to Farga on any anomaly.
+    /// Runs as a sidecar in the Guilhem pod (independent of the main process).
+    Watch,
 }
 
 #[tokio::main]
@@ -110,5 +115,6 @@ async fn main() -> anyhow::Result<()> {
             let proj = if project == "default" { cfg.project } else { project };
             commands::report::run(&url, &proj).await
         }
+        Commands::Watch => commands::watch::run().await,
     }
 }

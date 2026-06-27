@@ -13,6 +13,15 @@ farga:
 # Uses Argo Workflows CronWorkflow syntax (standard cron).
 # Kept infrequent to avoid token burn on quiet periods.
 chronicleSchedule: "0 */6 * * *" # every 6 hours
+
+sre:
+  # How often the no-LLM watchdog probes services (seconds).
+  watchdogIntervalSecs: 300
+  # How often the LLM alert layer checks for watchdog signals and posts to Matrix.
+  alertSchedule: "*/30 * * * *"
+  # Matrix room ID to post alerts to. Empty = alerting disabled.
+  # Set to a real room ID (e.g. !abc123:occitane.guilhem) to enable.
+  matrixRoomId: ""
 resources:
   requests:
     cpu: 50m

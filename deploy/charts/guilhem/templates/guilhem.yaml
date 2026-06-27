@@ -249,6 +249,9 @@ spec:
             - name: tools
               mountPath: /tools
               readOnly: true
+          env:
+            - name: SRE_MATRIX_ROOM_ID
+              value: {{ .Values.sre.matrixRoomId | quote }}
           readinessProbe:
             httpGet:
               path: /health
@@ -257,6 +260,30 @@ spec:
             periodSeconds: 10
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+        # SRE watchdog sidecar — no-LLM health probe (Caissa#25).
+        # Runs caissa watch in a loop; on anomaly writes a bug-signal to Farga.
+        # Independent of the main guilhem process — survives crashes of the listen loop.
+        - name: sre-watchdog
+          image: {{ .Values.image }}
+          imagePullPolicy: Always
+          command: ["caissa", "watch"]
+          env:
+            - name: FARGA_URL
+              value: {{ .Values.farga.url | quote }}
+            - name: WATCHDOG_PROJECT
+              value: {{ .Values.farga.project | quote }}
+            - name: WATCHDOG_INTERVAL_SECS
+              value: {{ .Values.sre.watchdogIntervalSecs | quote }}
+            - name: GUILHEM_URL
+              value: "http://guilhem.agents.svc.cluster.local:8080"
+            - name: DISPATCHER_URL
+              value: "http://dispatcher.agents.svc.cluster.local:9090"
+          resources:
+            requests:
+              cpu: 5m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
       volumes:
         - name: caissa-config
           configMap:
