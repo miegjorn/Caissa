@@ -1,7 +1,7 @@
 # Guilhem agent chart values.
 # Image is built by: caissa build guilhem
 
-image: ghcr.io/miegjorn/caissa-sandbox:guilhem-sha-be98421 # CI writes sha-tagged value here
+image: ghcr.io/miegjorn/caissa-sandbox:guilhem-sha-4e1f709 # CI writes sha-tagged value here
 # Lean CLI image for sidecars that only need the caissa binary (no agent sandbox).
 # CI keeps this current with every push to Caissa main.
 caissaImage: ghcr.io/miegjorn/caissa:latest
