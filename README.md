@@ -2,7 +2,7 @@
 
 **Caissa** (Occitan: *chest/box*) is the Docker-based container toolbox.
 
-It contains a sandboxed Claude Code runtime, a PII anonymization proxy, and a sidecar reporter.
+It contains a sandboxed Claude Code runtime, a PII anonymization proxy, a sidecar reporter, `caissa dispatch` (MCP server for agent orchestration), and `caissa watch` (SRE watchdog).
 
 It is also the **deployment home** for the Occitan stack: the `caissa` CLI builds and spawns
 agent images (`build` / `push` / `spawn` / `listen`), and `deploy/` holds the kind cluster

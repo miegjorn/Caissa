@@ -6,6 +6,8 @@ workspaces_dir = "workspaces"
 fondament_path = "../Fondament"
 generation = "guilhem"
 
+amassada_url = "http://amassada:7700"
+
 # MCP endpoints injected into agent containers at spawn time.
 # Defaults point to cluster-internal DNS (works in kind/EKS/AKS without changes).
 # For local dev with kind + port-forward, override to localhost:

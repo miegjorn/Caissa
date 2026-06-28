@@ -334,12 +334,21 @@ kubectl get deployment guilhem -n agents
 kubectl logs -n agents deployment/guilhem -f
 ```
 
-Guilhem's pod runs `caissa listen` — a lightweight HTTP server on port 8080, with two
-independent endpoints. `POST /trigger/chronicle` is one-shot: each call runs a
-non-interactive Claude Code session and exits. Token cost is zero when idle. Chronicle
-runs use `claude-haiku-4-5-20251001` by default; override with the `chronicle_model` key
-in `caissa.toml` or the `CHRONICLE_MODEL` env var. `POST /matrix/reply` is NOT one-shot —
-see "Guilhem in Matrix rooms" below for its persistent-session model.
+Guilhem's pod runs `caissa listen` — a lightweight HTTP server on port 8080 with the
+following routes:
+
+- `POST /turn` — single-shot turn endpoint; Amassada assembles context and calls this.
+- `POST /trigger/chronicle` — one-shot chronicle trigger (Argo Workflows / cron); runs a
+  non-interactive Claude Code session and posts the result to Farga. Token cost is zero
+  when idle. Uses `claude-haiku-4-5-20251001` by default; override with `chronicle_model`
+  in `caissa.toml` or `CHRONICLE_MODEL` env.
+- `POST /trigger/sre-alert` — CronWorkflow-triggered (every 30 min); fetches watchdog
+  signals from Farga and posts a Matrix alert if any are found.
+- `POST /trigger/backlog-review` — CronWorkflow-triggered (weekly); synthesizes open
+  GitHub issues across miegjorn repos and writes a review to Farga.
+- `POST /matrix/reply` — NOT one-shot; see "Guilhem in Matrix rooms" below for its
+  persistent-session model.
+- `GET /health` — liveness probe.
 
 Trigger a manual chronicle run:
 
