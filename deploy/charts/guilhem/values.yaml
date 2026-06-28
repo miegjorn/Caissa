@@ -1,7 +1,7 @@
 # Guilhem agent chart values.
 # Image is built by: caissa build guilhem
 
-image: ghcr.io/miegjorn/caissa-sandbox:guilhem-sha-7da7fd3 # CI writes sha-tagged value here
+image: ghcr.io/miegjorn/caissa-sandbox:guilhem-sha-3189512 # CI writes sha-tagged value here
 # Lean CLI image for sidecars that only need the caissa binary (no agent sandbox).
 # CI keeps this current with every push to Caissa main.
 caissaImage: ghcr.io/miegjorn/caissa:latest
@@ -16,7 +16,6 @@ farga:
 # Uses Argo Workflows CronWorkflow syntax (standard cron).
 # Kept infrequent to avoid token burn on quiet periods.
 chronicleSchedule: "0 */6 * * *" # every 6 hours
-
 sre:
   # How long to wait for a /health response before counting it as a failure (seconds).
   healthTimeoutSecs: 10
@@ -30,10 +29,9 @@ sre:
   # Matrix room ID to post alerts to. Empty = alerting disabled.
   # Set to a real room ID (e.g. !abc123:occitane.guilhem) to enable.
   matrixRoomId: ""
-
 backlog:
   # Cron schedule for the backlog review run (weekly by default).
-  reviewSchedule: "0 9 * * 1"  # Monday 09:00 America/Toronto
+  reviewSchedule: "0 9 * * 1" # Monday 09:00 America/Toronto
   # Matrix room ID to post the backlog review summary to. Empty = posting disabled.
   matrixRoomId: ""
 resources:
