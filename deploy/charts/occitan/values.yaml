@@ -49,7 +49,7 @@ amassada:
 # ─── Charradissa ─────────────────────────────────────────────────────────────
 charradissa:
   image: ghcr.io/miegjorn/charradissa
-  imageTag: sha-58ef72e # CI writes sha-<sha> here on every main push
+  imageTag: sha-713d11e # CI writes sha-<sha> here on every main push
   replicas: 1
   port: 8448
   env:
