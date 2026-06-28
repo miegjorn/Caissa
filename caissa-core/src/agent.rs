@@ -11,6 +11,12 @@ pub struct FondamentDef {
     pub context: String,
     #[serde(default)]
     pub skills: Vec<String>,
+    /// Reasoning/discipline modifiers declared by the definition (e.g.
+    /// "deconstructive"). Currently informational — formalizes what Caissa's
+    /// listen.rs hardcodes — but available for future tooling. Non-breaking:
+    /// older definitions without this field default to an empty list.
+    #[serde(default)]
+    pub modifiers: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -265,6 +271,8 @@ mod tests {
             kind: "role".into(),
             default_model: None,
             context: "You are an application architect.".into(),
+            skills: vec![],
+            modifiers: vec![],
         };
         let md = assemble_workspace_md(Some(&domain), Some(&facet), Some("## Current state"));
         assert!(md.contains("# Domain: Farga"));
@@ -274,12 +282,29 @@ mod tests {
     }
 
     #[test]
+    fn fondament_def_parses_modifiers_list() {
+        let yaml = "id: fondament/guilhem\nkind: role\ncontext: |\n  You are Guilhem.\nmodifiers:\n  - deconstructive\n";
+        let def: FondamentDef = serde_yaml::from_str(yaml).expect("parse def with modifiers");
+        assert_eq!(def.modifiers, vec!["deconstructive".to_string()]);
+    }
+
+    #[test]
+    fn fondament_def_modifiers_defaults_empty_when_absent() {
+        // Non-breaking: a definition without `modifiers:` still parses.
+        let yaml = "id: fondament/legacy\nkind: role\ncontext: |\n  You are a legacy agent.\n";
+        let def: FondamentDef = serde_yaml::from_str(yaml).expect("parse def without modifiers");
+        assert!(def.modifiers.is_empty());
+    }
+
+    #[test]
     fn assemble_image_md_trims_trailing_whitespace() {
         let def = FondamentDef {
             id: "fondament/test".into(),
             kind: "role".into(),
             default_model: None,
             context: "You are a test agent.\n\n".into(),
+            skills: vec![],
+            modifiers: vec![],
         };
         let md = assemble_image_claude_md(&def);
         assert!(!md.ends_with('\n'));
