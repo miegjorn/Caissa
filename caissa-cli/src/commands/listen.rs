@@ -204,6 +204,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         .route("/trigger/sre-alert", post(handle_sre_alert))
         .route("/trigger/backlog-review", post(handle_backlog_review))
         .route("/matrix/reply", post(handle_matrix_reply))
+        .route("/turn", post(handle_turn))
         .route("/health", axum::routing::get(|| async { "ok" }))
         .with_state(state);
 
@@ -668,21 +669,8 @@ async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::
         // rather than once per message — always attach the full tool/MCP
         // set so capability doesn't get frozen at whatever the room's first
         // message happened to need.
-        let mcp_servers = serde_json::json!({
-            "farga": { "type": "http", "url": state.farga_mcp_url },
-            "dispatcher": { "type": "http", "url": state.dispatcher_mcp_url },
-        });
-        let allowed_tools = vec![
-            "Bash".to_string(), "Edit".to_string(), "Write".to_string(),
-            "mcp__farga__search_signals".to_string(),
-            "mcp__farga__read_context".to_string(),
-            "mcp__farga__list_projects".to_string(),
-            "mcp__farga__update_component_todo".to_string(),
-            "mcp__farga__write_signal".to_string(),
-            "mcp__dispatcher__invoke_agent".to_string(),
-            "mcp__dispatcher__get_agent_result".to_string(),
-            "mcp__dispatcher__list_agent_specs".to_string(),
-        ];
+        let mcp_servers = guilhem_mcp_servers(state);
+        let allowed_tools = guilhem_allowed_tools();
 
         let (system_prompt, skills) = resolve_guilhem_prompt(&state.fondament_path, &state.generation, &req.room_id);
         let init = SidecarInit {
@@ -705,6 +693,111 @@ async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::
     session.last_activity = std::time::Instant::now();
 
     Ok(reply)
+}
+
+/// The MCP servers attached to every Guilhem sidecar session — Farga (memory)
+/// and the dispatcher (component-agent routing). Shared by the per-room Matrix
+/// path and the single-shot `/turn` path so capability stays in lockstep.
+fn guilhem_mcp_servers(state: &ListenState) -> serde_json::Value {
+    serde_json::json!({
+        "farga": { "type": "http", "url": state.farga_mcp_url },
+        "dispatcher": { "type": "http", "url": state.dispatcher_mcp_url },
+    })
+}
+
+/// The tool allow-list granted to every Guilhem sidecar session. Kept as a
+/// single source of truth so the Matrix and `/turn` paths can't drift apart.
+fn guilhem_allowed_tools() -> Vec<String> {
+    vec![
+        "Bash".to_string(), "Edit".to_string(), "Write".to_string(),
+        "mcp__farga__search_signals".to_string(),
+        "mcp__farga__read_context".to_string(),
+        "mcp__farga__list_projects".to_string(),
+        "mcp__farga__update_component_todo".to_string(),
+        "mcp__farga__write_signal".to_string(),
+        "mcp__dispatcher__invoke_agent".to_string(),
+        "mcp__dispatcher__get_agent_result".to_string(),
+        "mcp__dispatcher__list_agent_specs".to_string(),
+    ]
+}
+
+// ── Amassada turn ─────────────────────────────────────────────────────────────
+
+/// POST /turn — Amassada orchestrates Guilhem as an "agent-as-endpoint"
+/// participant (Option B-full). Unlike `/matrix/reply`, this is single-shot:
+/// Amassada owns the conversation and assembles the full context, so each turn
+/// spawns a fresh `agent-sidecar.js`, sends one user message, and tears the
+/// process down. No per-room session is created or reused.
+///
+/// The request's `system_prompt` is used verbatim as the sidecar system prompt
+/// (Amassada assembles the persona/context, including any deconstructive
+/// preamble it wants), while the tool/MCP set and skills mirror the Matrix path
+/// so Guilhem has the same capabilities here as in a room.
+#[derive(Deserialize)]
+struct TurnReq {
+    system_prompt: String,
+    context: String,
+    model: String,
+    max_tokens: u32,
+}
+
+#[derive(Serialize)]
+struct TurnResp {
+    text: String,
+    input_tokens: u32,
+    output_tokens: u32,
+}
+
+async fn handle_turn(
+    State(state): State<Arc<ListenState>>,
+    Json(req): Json<TurnReq>,
+) -> Result<Json<TurnResp>, StatusCode> {
+    tracing::info!("turn request: model={}, max_tokens={}", req.model, req.max_tokens);
+
+    match run_turn(&state, &req).await {
+        Ok(text) => Ok(Json(TurnResp {
+            text,
+            // The sidecar does not surface token counts yet; see Caissa Farga
+            // TODO (caissa-listen). Reported as 0 until that lands.
+            input_tokens: 0,
+            output_tokens: 0,
+        })),
+        Err(e) => {
+            tracing::error!("turn failed: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+async fn run_turn(state: &ListenState, req: &TurnReq) -> anyhow::Result<String> {
+    // Skills come from the Fondament def (same source as the Matrix path); fall
+    // back to none if the definition isn't present (e.g. local dev without a
+    // Fondament checkout at fondament_path).
+    let skills = match load_fondament_def(&state.fondament_path, &state.generation) {
+        Ok(def) => def.skills,
+        Err(e) => {
+            tracing::warn!(
+                "fondament def not found for '{}' at '{}': {}; turn runs without skills",
+                state.generation, state.fondament_path, e
+            );
+            vec![]
+        }
+    };
+
+    let init = SidecarInit {
+        system_prompt: req.system_prompt.clone(),
+        model: req.model.clone(),
+        allowed_tools: guilhem_allowed_tools(),
+        skills,
+        mcp_servers: guilhem_mcp_servers(state),
+    };
+
+    // Single-shot: spawn, send the assembled context as one user message from
+    // "amassada", then tear the process down regardless of outcome.
+    let mut process = SidecarProcess::spawn(&init).await?;
+    let result = process.send("amassada", &req.context).await;
+    process.kill();
+    result
 }
 
 /// Periodically kills and removes any RoomSession that's been idle past
@@ -789,5 +882,40 @@ mod session_supervisor_tests {
         });
 
         assert!(!session.process.is_alive());
+    }
+}
+
+#[cfg(test)]
+mod turn_endpoint_tests {
+    use super::*;
+
+    #[test]
+    fn turn_req_deserializes_from_amassada_payload() {
+        // Mirrors the body Amassada POSTs to /turn.
+        let body = r#"{
+            "system_prompt": "You are Guilhem.",
+            "context": "Pierre-Luc: situate Amassada in the trajectory.",
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 4096
+        }"#;
+        let req: TurnReq = serde_json::from_str(body).expect("TurnReq should deserialize");
+        assert_eq!(req.system_prompt, "You are Guilhem.");
+        assert_eq!(req.context, "Pierre-Luc: situate Amassada in the trajectory.");
+        assert_eq!(req.model, "claude-sonnet-4-6");
+        assert_eq!(req.max_tokens, 4096);
+    }
+
+    #[test]
+    fn turn_resp_serializes_with_token_fields() {
+        let resp = TurnResp {
+            text: "Amassada is the session engine.".to_string(),
+            input_tokens: 0,
+            output_tokens: 0,
+        };
+        let value: serde_json::Value =
+            serde_json::to_value(&resp).expect("TurnResp should serialize");
+        assert_eq!(value["text"], "Amassada is the session engine.");
+        assert_eq!(value["input_tokens"], 0);
+        assert_eq!(value["output_tokens"], 0);
     }
 }
