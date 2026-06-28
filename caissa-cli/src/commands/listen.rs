@@ -1,8 +1,20 @@
-/// Guilhem daemon — lightweight webhook listener with two independent handlers.
+/// Guilhem daemon — HTTP listener with six routes:
+///
+/// `POST /turn` — Amassada orchestrates Guilhem as an agent-as-endpoint participant
+/// (Option B-full). Single-shot: Amassada assembles the full context, sends one
+/// user message, and the process tears down. No per-room session is created.
 ///
 /// `POST /trigger/chronicle` — accepts chronicle trigger events from Argo
 /// Workflows, git webhooks, or cron. One-shot: runs `claude --print "<task>"`
 /// as a subprocess, posts the output as a Signal to Farga, exits.
+///
+/// `POST /trigger/sre-alert` — CronWorkflow-triggered (every 30min). Fetches
+/// recent watchdog signals from Farga; if any are present and SRE_MATRIX_ROOM_ID
+/// is configured, posts a formatted alert to the Matrix room.
+///
+/// `POST /trigger/backlog-review` — CronWorkflow-triggered (weekly). Guilhem
+/// reads open GitHub issues across miegjorn repos, synthesizes a backlog review,
+/// writes it to Farga, and optionally posts a summary to Matrix.
 ///
 /// `POST /matrix/reply` — Charradissa (the Matrix appservice/bridge) forwards
 /// every room message here; this listener generates the actual reply.
@@ -13,6 +25,8 @@
 /// session mechanism. A background sweep reaps sessions idle past 30 minutes;
 /// a dead/crashed sidecar is detected and respawned automatically on the next
 /// message for that room. See `ListenState::room_sessions`.
+///
+/// `GET /health` — liveness probe; returns `200 ok`.
 ///
 /// Token usage is proportional to actual events for chronicle; Matrix sessions
 /// cost tokens for as long as a room stays active (up to the idle timeout).
@@ -610,9 +624,10 @@ async fn handle_matrix_reply(
 ///
 /// Returns `(system_prompt, skills)`. Skills come from the role definition's
 /// `skills:` list; they are empty if the definition is missing or declares none.
-/// The supply-chain decision for vendoring skills into the image is tracked in
-/// Caissa#13 — the path is wired here so that decision doesn't require a code
-/// change, only an image change.
+/// The supply-chain decision for vendoring skills into the image was tracked in
+/// Caissa#13 (now closed). Decision: defer — the skills list is wired here so
+/// that the bake-in doesn't require a code change (only an image change), but
+/// skills are not currently baked into the image. See install.md for details.
 ///
 /// Falls back to a bare prompt if the definition file is missing (e.g. outside
 /// the built image, in local dev without a Fondament checkout at fondament_path).

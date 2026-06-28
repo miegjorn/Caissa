@@ -78,7 +78,7 @@ fn default_matrix_model() -> String {
 }
 
 fn default_amassada_url() -> String {
-    "http://amassada.occitan-system.svc.cluster.local:7600".into()
+    "http://amassada.occitan-system.svc.cluster.local:7700".into()
 }
 
 fn default_sre_health_timeout_secs() -> u64 { 10 }
