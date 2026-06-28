@@ -80,6 +80,13 @@ charradissa:
     agents:
       # Default route — Guilhem handles all rooms that have no explicit route.
       default: "http://guilhem.agents.svc.cluster.local:8080"
+      # Amassada-backed rooms: Charradissa injects project_id into the turn body and
+      # forwards to Amassada, which resolves the canvas and dispatches to the agent pod.
+      projectRoutes:
+        - rooms:
+            - "!zSeBDhFjVObXNpqAtF:occitane.guilhem"
+          projectId: "occitan"
+          endpoint: "http://amassada:7700/sessions/{room_id}/message"
       # Per-room routes → independent component agent pods (deploy/charts/component-agents).
       routes:
         - roomId: "!hNBIrYgqZxPsnBntbY:occitane.guilhem"

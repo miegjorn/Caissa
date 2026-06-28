@@ -37,6 +37,14 @@ data:
     {{- range .Values.charradissa.config.agents.routes }}
     {{ .roomId | quote }} = {{ .agentUrl | quote }}
     {{- end }}
+    {{- range .Values.charradissa.config.agents.projectRoutes }}
+
+    [[agents.project]]
+    type = "amassada_backed"
+    rooms = [{{ range $i, $r := .rooms }}{{ if $i }}, {{ end }}{{ $r | quote }}{{ end }}]
+    project_id = {{ .projectId | quote }}
+    endpoint = {{ .endpoint | quote }}
+    {{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
