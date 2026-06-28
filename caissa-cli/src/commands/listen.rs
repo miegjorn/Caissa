@@ -53,6 +53,9 @@ struct ListenState {
     sre_matrix_room_id: String,
     /// Matrix room ID for backlog review posts. Empty string = posting disabled.
     backlog_matrix_room_id: String,
+    dream_model: String,
+    /// Matrix room ID for dream report posts. Empty = posting disabled.
+    dream_matrix_room_id: String,
     /// One persistent agent-sidecar.js child process per actively-chatting
     /// Matrix room. Reaped by an idle-timeout sweep (see spawn_idle_reaper).
     room_sessions: Arc<tokio::sync::RwLock<HashMap<String, RoomSession>>>,
@@ -208,6 +211,8 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         generation: config.generation,
         sre_matrix_room_id: std::env::var("SRE_MATRIX_ROOM_ID").unwrap_or_default(),
         backlog_matrix_room_id: std::env::var("BACKLOG_MATRIX_ROOM_ID").unwrap_or_default(),
+        dream_model: config.dream_model,
+        dream_matrix_room_id: std::env::var("DREAM_MATRIX_ROOM_ID").unwrap_or_default(),
         room_sessions: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
     });
 
@@ -217,6 +222,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         .route("/trigger/chronicle", post(handle_chronicle))
         .route("/trigger/sre-alert", post(handle_sre_alert))
         .route("/trigger/backlog-review", post(handle_backlog_review))
+        .route("/trigger/dream", post(handle_dream))
         .route("/matrix/reply", post(handle_matrix_reply))
         .route("/turn", post(handle_turn))
         .route("/health", axum::routing::get(|| async { "ok" }))
@@ -554,6 +560,203 @@ backlog review run for the miegjorn GitHub organisation.
 Your written response IS the review — keep it crisp and actionable, not exhaustive.
 Today's date is available via `date` in Bash.
 "#,
+        project = project
+    )
+}
+
+// ── Dream — nightly consolidation ─────────────────────────────────────────────
+
+/// POST /trigger/dream — CronJob-triggered daily (03:00 UTC).
+///
+/// Three-phase session:
+/// 1. GATHER — read Farga signals (past 24h) + GitHub state across all repos
+/// 2. SYNTHESIZE — identify drift, improvement opportunities, patterns
+/// 3. ACT — create GitHub issues for actionable gaps; write dream report to Farga
+async fn handle_dream(
+    State(state): State<Arc<ListenState>>,
+    Json(req): Json<TriggerReq>,
+) -> StatusCode {
+    tracing::info!("dream trigger received: {}", req.reason);
+
+    tokio::spawn(async move {
+        match run_dream(&state).await {
+            Ok(_) => tracing::info!("dream complete"),
+            Err(e) => tracing::error!("dream failed: {}", e),
+        }
+    });
+
+    StatusCode::ACCEPTED
+}
+
+async fn run_dream(state: &ListenState) -> anyhow::Result<()> {
+    let mcp_config = format!(
+        r#"{{"mcpServers":{{"farga":{{"type":"http","url":"{}"}}}}}}"#,
+        state.farga_mcp_url
+    );
+    let mcp_path = std::env::temp_dir().join("guilhem-dream-mcp.json");
+    std::fs::write(&mcp_path, &mcp_config)?;
+
+    let prompt = build_dream_prompt(&state.farga_project);
+
+    let output = tokio::process::Command::new("claude")
+        .args([
+            "--print",
+            &prompt,
+            "--model",
+            &state.dream_model,
+            "--mcp-config",
+            mcp_path.to_str().unwrap(),
+            "--allowed-tools",
+            "Bash,mcp__farga__search_signals,mcp__farga__read_context,mcp__farga__write_signal,mcp__farga__update_component_todo",
+        ])
+        .env("FARGA_URL", &state.farga_url)
+        .env("FARGA_PROJECT", &state.farga_project)
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("dream claude exited with error: {}", stderr);
+    }
+
+    let report = String::from_utf8_lossy(&output.stdout).to_string();
+
+    if report.trim().is_empty() {
+        tracing::warn!("dream: empty output from claude");
+        return Ok(());
+    }
+
+    tracing::info!("dream complete — report written to Farga by agent");
+
+    // Post summary to Matrix if configured
+    if !state.dream_matrix_room_id.is_empty() {
+        let synapse_url = std::env::var("SYNAPSE_URL")
+            .unwrap_or_else(|_| "http://synapse.occitan-system.svc.cluster.local:8008".into());
+        let admin_token = std::env::var("SYNAPSE_ADMIN_TOKEN").unwrap_or_default();
+
+        if admin_token.is_empty() {
+            tracing::warn!("dream: SYNAPSE_ADMIN_TOKEN not set — skipping Matrix post");
+            return Ok(());
+        }
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()?;
+
+        let summary = if report.len() > 2000 {
+            format!("{}…\n\n(full dream report written to Farga)", &report[..2000])
+        } else {
+            report.clone()
+        };
+
+        let txn = uuid::Uuid::new_v4();
+        let matrix_url = format!(
+            "{}/_matrix/client/v3/rooms/{}/send/m.room.message/{}",
+            synapse_url, state.dream_matrix_room_id, txn
+        );
+
+        client
+            .put(&matrix_url)
+            .bearer_auth(&admin_token)
+            .json(&serde_json::json!({ "msgtype": "m.text", "body": summary }))
+            .send()
+            .await?
+            .error_for_status()?;
+
+        tracing::info!("dream report posted to Matrix room {}", state.dream_matrix_room_id);
+    }
+
+    Ok(())
+}
+
+fn build_dream_prompt(project: &str) -> String {
+    format!(
+        r###"You are Guilhem de Tudela, org agent for the Occitan stack. This is the nightly
+dream consolidation run. A dream has three phases — follow them in order.
+
+---
+
+## PHASE 1: GATHER (read, do not act yet)
+
+1. Get today's date: `date -u '+%Y-%m-%d'`
+
+2. Read Farga signals from the past 24 hours using mcp__farga__search_signals with
+   since = yesterday's ISO 8601 timestamp. Note what changed: what was built,
+   what was fixed, what was flagged.
+
+3. Read the Farga project context (mcp__farga__read_context, project: "{project}") to
+   understand the stack's current trajectory and open todos.
+
+4. Fetch GitHub state across all 8 repos. Run these in sequence:
+   ```
+   for repo in Gardian Fondament Farga Amassada Charradissa Cor Caissa Occitan; do
+     echo "=== $repo open issues ==="
+     gh issue list --repo miegjorn/$repo --state open --json number,title,createdAt,updatedAt,labels --limit 50
+     echo "=== $repo recent commits (24h) ==="
+     gh api repos/miegjorn/$repo/commits --jq '.[0:5] | .[] | "\(.sha[:8]) \(.commit.message | split("\n")[0])"'
+   done
+   ```
+
+5. Fetch open PRs across all repos:
+   ```
+   for repo in Gardian Fondament Farga Amassada Charradissa Cor Caissa Occitan; do
+     gh pr list --repo miegjorn/$repo --state open --json number,title,createdAt,labels
+   done
+   ```
+
+---
+
+## PHASE 2: SYNTHESIZE (think before acting)
+
+Using what you gathered, reason through:
+
+- **What was actually built or fixed in the past 24h?** (from Farga signals + commits)
+- **What improvement opportunities exist that are NOT already tracked as open issues?**
+  Focus on: doc drift between code and README, unclosed stubs, missing integrations,
+  architectural gaps that became visible from yesterday's activity.
+- **Cross-repo implications**: does a change in one repo create a gap in another?
+  (e.g. a new Amassada endpoint that Charradissa doesn't call yet)
+- **Pattern signals**: recurring themes across multiple signals (e.g. "three signals
+  about credential flow" → underlying structural issue)
+- **What is the stack dreaming toward?** What does the trajectory imply about what
+  should be built next?
+
+For each opportunity you identify, decide:
+- Is it actionable enough for a GitHub issue right now?
+- Which repo does it belong in?
+- What labels? (bug / enhancement / documentation / technical-debt)
+- Does a similar open issue already exist? (check before creating)
+
+---
+
+## PHASE 3: ACT
+
+**For each actionable improvement opportunity** (aim for 3–8, quality over quantity):
+
+1. Verify no duplicate exists: `gh issue list --repo miegjorn/<repo> --state open --search "<key term>"`
+2. Create the issue:
+   ```
+   gh issue create \
+     --repo miegjorn/<repo> \
+     --title "<concise, specific, actionable title>" \
+     --body "Context\n<what was observed and why it matters>\n\nProposed approach\n<what the fix would involve>\n\nSource: identified during nightly dream consolidation {{date}}." \
+     --label "<appropriate label(s)>"
+   ```
+3. Note the created issue URL for the dream report.
+
+**Write the dream report to Farga** using mcp__farga__write_signal:
+- project: "{project}"
+- source: "dream"
+- content: A structured summary including:
+  - Date of dream
+  - Key observations from the 24h window (3–5 bullet points)
+  - Improvement opportunities identified (with reasoning)
+  - GitHub issues created (with URLs)
+  - Stack trajectory note: what does today's dream imply about where the stack is heading?
+
+**Your written response** is the dream report — concise, substantive, forward-looking.
+Do not just narrate what you did. Chronicle what the stack is becoming.
+"###,
         project = project
     )
 }

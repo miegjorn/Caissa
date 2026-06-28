@@ -126,6 +126,8 @@ data:
     # Haiku for routine chronicle runs — cheapest model, right for observation tasks.
     # Override: CHRONICLE_MODEL env or set chronicle_model here for a different model.
     chronicle_model = "claude-haiku-4-5-20251001"
+    # Sonnet for dream runs — synthesis requires more capability than chronicle.
+    dream_model = {{ .Values.dream.model | quote }}
 
     # SRE watchdog thresholds (Caissa#15)
     sre_health_timeout_secs = {{ .Values.sre.healthTimeoutSecs }}
@@ -359,6 +361,8 @@ spec:
               value: {{ .Values.sre.matrixRoomId | quote }}
             - name: BACKLOG_MATRIX_ROOM_ID
               value: {{ .Values.backlog.matrixRoomId | quote }}
+            - name: DREAM_MATRIX_ROOM_ID
+              value: {{ .Values.dream.matrixRoomId | quote }}
           volumeMounts:
             - name: caissa-config
               mountPath: /workspace/caissa.toml

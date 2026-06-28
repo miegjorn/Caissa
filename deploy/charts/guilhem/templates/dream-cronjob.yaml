@@ -1,0 +1,47 @@
+{{- if .Values.dream.schedule }}
+# Nightly dream consolidation — Guilhem reads Farga + GitHub, synthesizes
+# improvement opportunities, creates GitHub issues, and writes the dream report.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: guilhem-dream
+  namespace: agents
+  labels:
+    app.kubernetes.io/name: guilhem-dream
+    app.kubernetes.io/part-of: occitan
+spec:
+  schedule: {{ .Values.dream.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # Dream can take up to 20 minutes on a rich night.
+      activeDeadlineSeconds: 1800
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: dream-trigger
+              image: curlimages/curl:8.11.0
+              command:
+                - curl
+                - --fail
+                - --silent
+                - --show-error
+                - --max-time
+                - "60"
+                - -X
+                - POST
+                - http://guilhem.agents.svc.cluster.local:8080/trigger/dream
+                - -H
+                - "Content-Type: application/json"
+                - -d
+                - '{"reason":"scheduled nightly dream"}'
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 16Mi
+                limits:
+                  memory: 32Mi
+{{- end }}

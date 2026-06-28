@@ -35,6 +35,13 @@ backlog:
   reviewSchedule: "0 9 * * 1" # Monday 09:00 America/Toronto
   # Matrix room ID to post the backlog review summary to. Empty = posting disabled.
   matrixRoomId: ""
+dream:
+  # Cron schedule for the nightly dream consolidation (daily 03:00 UTC).
+  schedule: "0 3 * * *"
+  # Matrix room ID to post the dream report summary to. Empty = posting disabled.
+  matrixRoomId: ""
+  # Model for dream synthesis. Sonnet is appropriate — dream requires genuine reasoning.
+  model: "claude-sonnet-4-6"
 resources:
   requests:
     cpu: 50m
