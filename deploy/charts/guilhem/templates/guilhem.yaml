@@ -120,7 +120,7 @@ data:
     pii_patterns = ["email", "phone"]
     workspaces_dir = "workspaces"
     fondament_path = "/fondament"
-    generation = "guilhem"
+    generation = {{ .Values.generation | quote }}
     farga_mcp_url = "http://farga.occitan-system.svc.cluster.local:7500/mcp"
     dispatcher_mcp_url = "http://dispatcher.agents.svc.cluster.local:9090/mcp"
     # Haiku for routine chronicle runs — cheapest model, right for observation tasks.

@@ -2,6 +2,7 @@
 # Image is built by: caissa build guilhem
 
 image: ghcr.io/miegjorn/caissa-sandbox:guilhem-sha-23ccdc5 # CI writes sha-tagged value here
+generation: guilhem
 # Lean CLI image for sidecars that only need the caissa binary (no agent sandbox).
 # CI keeps this current with every push to Caissa main.
 caissaImage: ghcr.io/miegjorn/caissa:latest

@@ -55,10 +55,7 @@ charradissa:
   env:
     CHARRADISSA_CONFIG: /config/charradissa.toml
     GUILHEM_URL: "http://guilhem.agents.svc.cluster.local:8080"
-  # Matrix appservice wiring. While disabled, Synapse starts without the
-  # charradissa registration and charradissa stays scaled to 0 (it needs the
-  # 'charradissa' secret with key as-token). Enable once the registration file
-  # and matching token are provisioned. See TODO in deploy notes.
+  # Appservice is active — charradissa token provisioned in the 'charradissa' secret.
   appservice:
     enabled: true
   config:
