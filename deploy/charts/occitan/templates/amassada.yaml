@@ -123,6 +123,13 @@ metadata:
     {{- include "occitan.selectorLabels" (dict "component" "amassada" "context" .) | nindent 4 }}
 spec:
   replicas: {{ .Values.amassada.replicas }}
+  # maxUnavailable: 0 — keep the old pod alive until the new one passes readiness.
+  # Prevents the "project agent unreachable" gap during rolling deploys.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       {{- include "occitan.selectorLabels" (dict "component" "amassada" "context" .) | nindent 6 }}
