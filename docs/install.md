@@ -346,6 +346,11 @@ following routes:
   signals from Farga and posts a Matrix alert if any are found.
 - `POST /trigger/backlog-review` — CronWorkflow-triggered (weekly); synthesizes open
   GitHub issues across miegjorn repos and writes a review to Farga.
+- `POST /trigger/dream` — CronJob-triggered (daily 03:00 UTC); three-phase nightly
+  consolidation: gather Farga signals + GitHub state across all repos, synthesize
+  improvement opportunities, create GitHub issues for actionable gaps, write a
+  `source: dream` signal to Farga. Uses `dream_model` (default `claude-sonnet-4-6`);
+  configure via `dream.schedule`/`dream.model`/`dream.matrixRoomId` in Helm values.
 - `POST /matrix/reply` — NOT one-shot; see "Guilhem in Matrix rooms" below for its
   persistent-session model.
 - `GET /health` — liveness probe.

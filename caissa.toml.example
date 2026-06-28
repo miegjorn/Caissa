@@ -18,6 +18,11 @@ dispatcher_mcp_url = "http://dispatcher.agents.svc.cluster.local:9090/mcp"
 
 # registry = "ghcr.io/miegjorn"
 
+# Model overrides (optional — defaults shown).
+# chronicle_model = "claude-haiku-4-5"   # routine observation; cheapest
+# matrix_model    = "claude-sonnet-4-6"  # interactive Matrix replies
+# dream_model     = "claude-sonnet-4-6"  # nightly dream synthesis; Sonnet is appropriate
+
 [sandbox]
 image = "caissa-sandbox:latest"
 network = "none"
