@@ -244,6 +244,10 @@ spec:
                   name: anthropic
                   key: api-key
                   optional: false
+            - name: SRE_MATRIX_ROOM_ID
+              value: {{ .Values.sre.matrixRoomId | quote }}
+            - name: BACKLOG_MATRIX_ROOM_ID
+              value: {{ .Values.backlog.matrixRoomId | quote }}
           volumeMounts:
             - name: caissa-config
               mountPath: /workspace/caissa.toml
@@ -254,11 +258,6 @@ spec:
             - name: tools
               mountPath: /tools
               readOnly: true
-          env:
-            - name: SRE_MATRIX_ROOM_ID
-              value: {{ .Values.sre.matrixRoomId | quote }}
-            - name: BACKLOG_MATRIX_ROOM_ID
-              value: {{ .Values.backlog.matrixRoomId | quote }}
           readinessProbe:
             httpGet:
               path: /health
