@@ -149,7 +149,8 @@ metadata:
     app.kubernetes.io/name: guilhem
     app.kubernetes.io/part-of: occitan
 data:
-  guilhem.yaml: |    id: fondament/guilhem
+  guilhem.yaml: |
+    id: fondament/guilhem
     kind: role
     default_model: claude-sonnet-4-6
     context: |
