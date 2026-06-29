@@ -425,8 +425,15 @@ chronicle run for project "{project}".
 
 {constraint}
 
+## BEFORE ANYTHING ELSE — Load the context graph
+
+Call mcp__farga__list_context_nodes (project: "{project}", role: "org") to see what
+the stack knows about itself: codebase references, architecture summaries, design
+rationale. This is your institutional memory. Read it before reading signals.
+
 You have the Farga MCP server attached. Ground your chronicle in real state — use its
 read tools before writing:
+- list_context_nodes (project: "{project}", role: "org") — stack context graph (read first)
 - search_signals (project: "{project}") — recent signals / activity
 - read_context (project: "{project}") — accumulated project context
 - list_projects — what projects exist
@@ -767,14 +774,19 @@ dream consolidation run. A dream has three phases — follow them in order.
 
 1. Get today's date: `date -u '+%Y-%m-%d'`
 
-2. Read Farga signals from the past 24 hours using mcp__farga__search_signals with
+2. Load the context graph: mcp__farga__list_context_nodes (project: "{project}", role: "org").
+   For each node that looks relevant to tonight's synthesis, call mcp__farga__read_context_node
+   to fetch its content. Pay particular attention to [occitan][system-rationale] — it defines
+   the constraints that govern all architectural decisions.
+
+3. Read Farga signals from the past 24 hours using mcp__farga__search_signals with
    since = yesterday's ISO 8601 timestamp. Note what changed: what was built,
    what was fixed, what was flagged.
 
-3. Read the Farga project context (mcp__farga__read_context, project: "{project}") to
+4. Read the Farga project context (mcp__farga__read_context, project: "{project}") to
    understand the stack's current trajectory and open todos.
 
-4. Fetch GitHub state across all 8 repos. Run these in sequence:
+5. Fetch GitHub state across all 8 repos. Run these in sequence:
    ```
    for repo in Gardian Fondament Farga Amassada Charradissa Cor Caissa Occitan; do
      echo "=== $repo open issues ==="
@@ -784,7 +796,7 @@ dream consolidation run. A dream has three phases — follow them in order.
    done
    ```
 
-5. Fetch open PRs across all repos:
+6. Fetch open PRs across all repos:
    ```
    for repo in Gardian Fondament Farga Amassada Charradissa Cor Caissa Occitan; do
      gh pr list --repo miegjorn/$repo --state open --json number,title,createdAt,labels
@@ -1194,11 +1206,15 @@ component agents. This is where synthesis becomes motion.
 
 ---
 
-## STEP 1 — Load system-defence axioms
+## STEP 1 — Load system-defence axioms and context graph
 
 `cat /fondament/definitions/fondament/system-defence.md`
 
 Read the axioms and risk classification table before evaluating anything.
+
+Then call mcp__farga__read_context_node (path: "[occitan][system-rationale]", role: "org")
+to load the stack-level design constraints. These govern what you can dispatch autonomously
+vs. what requires Pierre-Luc's sign-off.
 
 ## STEP 2 — Read the dream output
 
@@ -1776,10 +1792,26 @@ Your public response reflects the recomposed whole.\n\
 The internal debate is yours alone — it does not appear in output.\n\
 --- end injection ---";
 
+    let context_graph_preamble = "\
+--- context graph ---\n\
+You have access to Farga's role-scoped context graph via:\n\
+  mcp__farga__list_context_nodes (project: \"occitan\", role: \"org\")\n\
+  mcp__farga__read_context_node  (path: \"[<component>][<type>]\", role: \"org\")\n\
+\n\
+When you need to understand a component (its code, its architecture, its constraints),\n\
+read its context node before acting. Key nodes:\n\
+  [occitan][system-rationale]     — stack-level design constraints (read before any architectural decision)\n\
+  [<component>][codebase]         — where its code lives, what its CLAUDE.md says\n\
+  [<component>][architecture]     — design summary, interfaces, invariants\n\
+\n\
+On your FIRST message in this session, call list_context_nodes to orient yourself.\n\
+--- end context graph ---";
+
     let prompt = format!(
-        "{}\n\n{}\n\nYou are replying in Matrix room {}.",
+        "{}\n\n{}\n\n{}\n\nYou are replying in Matrix room {}.",
         deconstructive_preamble,
         role_context.trim_end(),
+        context_graph_preamble,
         room_id,
     );
     (prompt, skills)
@@ -2114,9 +2146,16 @@ Not permitted: editing source files, running builds, committing code.
 
 ---
 
-### Step 1 — Read Farga context
+### Step 1 — Load your context
 
-Call mcp__farga__read_context (project: "{project}") to orient yourself.
+Call mcp__farga__read_context_node (path: "[{component}][codebase]", role: "component")
+to learn where your code lives and what your CLAUDE.md says. This is your primary
+self-knowledge — what you are, where your code is, how it is structured.
+
+Call mcp__farga__read_context_node (path: "[{component}][architecture]", role: "architect")
+if you need to understand design constraints before routing work to specialists.
+
+Call mcp__farga__read_context (project: "{project}") to orient yourself in the stack.
 Call mcp__farga__search_signals (project: "{project}") to see recent activity and
 your current mission (source="mission-pulse" or source="component-mission").
 
