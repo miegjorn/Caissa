@@ -123,6 +123,7 @@ data:
     generation = {{ .Values.generation | quote }}
     farga_mcp_url = "http://farga.occitan-system.svc.cluster.local:7500/mcp"
     dispatcher_mcp_url = "http://dispatcher.agents.svc.cluster.local:9090/mcp"
+    charradissa_mcp_url = "http://charradissa.occitan-system.svc.cluster.local:8448/mcp"
     # Haiku for routine chronicle runs — cheapest model, right for observation tasks.
     # Override: CHRONICLE_MODEL env or set chronicle_model here for a different model.
     chronicle_model = "claude-haiku-4-5-20251001"
@@ -236,7 +237,11 @@ data:
         domain/facet agent over doing it yourself — unless the task is small, urgent,
         or requires org-level context the component agent would not hold.
     tools:
-      always_on: []
+      always_on:
+        - mcp__charradissa__matrix_send
+        - mcp__charradissa__matrix_invite
+        - mcp__charradissa__matrix_kick
+        - mcp__charradissa__matrix_get_dm
       jit: []
     skills:
       - superpowers:brainstorming

@@ -27,6 +27,10 @@ pub struct CaissaConfig {
     /// Dispatcher MCP endpoint injected into the agent container at spawn time.
     #[serde(default = "default_dispatcher_mcp_url")]
     pub dispatcher_mcp_url: String,
+    /// Charradissa Matrix MCP endpoint — exposes matrix_send, matrix_invite, matrix_kick,
+    /// matrix_get_dm so agents can act in Matrix without holding their own Matrix token.
+    #[serde(default = "default_charradissa_mcp_url")]
+    pub charradissa_mcp_url: String,
     /// Model used for non-interactive chronicle runs (`caissa listen`).
     /// Defaults to Haiku — fast, cheap, right for routine observation.
     /// Override per-deployment: chronicle_model = "claude-sonnet-4-6"
@@ -73,6 +77,10 @@ fn default_dispatcher_mcp_url() -> String {
     "http://dispatcher.agents.svc.cluster.local:9090/mcp".into()
 }
 
+fn default_charradissa_mcp_url() -> String {
+    "http://charradissa.occitan-system.svc.cluster.local:8448/mcp".into()
+}
+
 fn default_chronicle_model() -> String {
     "claude-haiku-4-5-20251001".into()
 }
@@ -105,6 +113,7 @@ impl Default for CaissaConfig {
             generation: default_generation(),
             farga_mcp_url: default_farga_mcp_url(),
             dispatcher_mcp_url: default_dispatcher_mcp_url(),
+            charradissa_mcp_url: default_charradissa_mcp_url(),
             chronicle_model: default_chronicle_model(),
             matrix_model: default_matrix_model(),
             dream_model: default_dream_model(),

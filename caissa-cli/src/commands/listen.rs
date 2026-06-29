@@ -48,6 +48,7 @@ struct ListenState {
     matrix_model: String,
     amassada_url: String,
     dispatcher_mcp_url: String,
+    charradissa_mcp_url: String,
     fondament_path: String,
     generation: String,
     /// Matrix room ID for SRE alert posts. Empty string = alerting disabled.
@@ -220,6 +221,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         matrix_model: config.matrix_model,
         amassada_url: config.amassada_url,
         dispatcher_mcp_url: config.dispatcher_mcp_url,
+        charradissa_mcp_url: config.charradissa_mcp_url,
         fondament_path: config.fondament_path,
         generation: config.generation,
         sre_matrix_room_id: std::env::var("SRE_MATRIX_ROOM_ID").unwrap_or_default(),
@@ -969,6 +971,7 @@ fn guilhem_mcp_servers(state: &ListenState) -> serde_json::Value {
     serde_json::json!({
         "farga": { "type": "http", "url": state.farga_mcp_url },
         "dispatcher": { "type": "http", "url": state.dispatcher_mcp_url },
+        "charradissa": { "type": "http", "url": state.charradissa_mcp_url },
     })
 }
 
@@ -985,6 +988,10 @@ fn guilhem_allowed_tools() -> Vec<String> {
         "mcp__dispatcher__invoke_agent".to_string(),
         "mcp__dispatcher__get_agent_result".to_string(),
         "mcp__dispatcher__list_agent_specs".to_string(),
+        "mcp__charradissa__matrix_send".to_string(),
+        "mcp__charradissa__matrix_invite".to_string(),
+        "mcp__charradissa__matrix_kick".to_string(),
+        "mcp__charradissa__matrix_get_dm".to_string(),
     ]
 }
 
