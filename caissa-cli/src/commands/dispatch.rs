@@ -20,6 +20,96 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
+// ── Scope rule structs ─────────────────────────────────────────────────────────
+
+#[derive(Clone, Debug)]
+struct ScopeRule {
+    /// The caller identity this rule applies to ("guilhem", etc.).
+    /// "*" means applies to any caller not matched by a more specific rule.
+    caller_identity: String,
+    /// If set, the facet must be one of these values.
+    allowed_facets: Option<Vec<String>>,
+    /// If true, domain must equal caller.
+    domain_must_match_caller: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ScopeRules(Vec<ScopeRule>);
+
+impl ScopeRules {
+    fn validate(&self, caller: &str, domain: &str, facet: &str) -> anyhow::Result<()> {
+        // Look for a rule matching this specific caller
+        let matched = self.0.iter().find(|r| r.caller_identity == caller);
+        // Fallback wildcard rule
+        let wildcard = self.0.iter().find(|r| r.caller_identity == "*");
+
+        let rule = matched.or(wildcard);
+
+        if let Some(r) = rule {
+            if let Some(allowed) = &r.allowed_facets {
+                anyhow::ensure!(
+                    allowed.iter().any(|f| f == facet),
+                    "scope violation: {} may only invoke facet {:?} (got '{}'); \
+                     route component work via nervi_publish instead",
+                    caller, allowed, facet
+                );
+            }
+            if r.domain_must_match_caller {
+                anyhow::ensure!(
+                    domain == caller,
+                    "scope violation: {} may only invoke agents in its own domain (got domain='{}'); \
+                     pass the puck back to Guilhem via nervi_publish if cross-component coordination is needed",
+                    caller, domain
+                );
+            }
+        } else {
+            // No rule found — apply safe defaults
+            if caller == "guilhem" {
+                anyhow::ensure!(
+                    facet == "architect",
+                    "scope violation: guilhem may only invoke facet=architect (got '{}'); \
+                     route component work via nervi_publish instead",
+                    facet
+                );
+            } else {
+                anyhow::ensure!(
+                    domain == caller,
+                    "scope violation: {} may only invoke agents in its own domain (got domain='{}'); \
+                     pass the puck back to Guilhem via nervi_publish if cross-component coordination is needed",
+                    caller, domain
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+// ── Skill YAML deserialization structs ────────────────────────────────────────
+
+// Used only for parsing fondament skill YAML at startup
+#[derive(serde::Deserialize, Default)]
+struct SkillInvokeAgentRules {
+    caller_identity: Option<String>,
+    #[serde(default)]
+    allowed_facets: Option<Vec<String>>,
+    #[serde(default)]
+    domain_must_match_caller: bool,
+}
+#[derive(serde::Deserialize, Default)]
+struct SkillDispatcherRules {
+    invoke_agent: Option<SkillInvokeAgentRules>,
+}
+#[derive(serde::Deserialize, Default)]
+struct SkillRulesFile {
+    #[serde(default)]
+    dispatcher: Option<SkillDispatcherRules>,
+}
+#[derive(serde::Deserialize)]
+struct SkillFile {
+    #[serde(default)]
+    rules: Option<SkillRulesFile>,
+}
+
 // ── State ─────────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -29,6 +119,7 @@ struct DispatchState {
     agents_namespace: String,
     farga_url: String,
     farga_mcp_url: String,
+    scope_rules: Arc<ScopeRules>,
 }
 
 // ── JSON-RPC 2.0 (shared pattern with Farga MCP) ─────────────────────────────
@@ -201,21 +292,7 @@ async fn call_tool(state: &DispatchState, name: &str, args: &Value) -> anyhow::R
                 !caller.is_empty(),
                 "caller is required — pass caller='guilhem' (org agent) or caller='<component>' (component agent)"
             );
-            if caller == "guilhem" {
-                anyhow::ensure!(
-                    facet == "architect",
-                    "scope violation: guilhem may only invoke facet=architect (got '{}'); \
-                     route work to component agents via nervi_publish instead",
-                    facet
-                );
-            } else {
-                anyhow::ensure!(
-                    domain == caller,
-                    "scope violation: {} may only invoke agents in its own domain (got domain='{}'); \
-                     pass the puck back to Guilhem via nervi_publish if cross-component coordination is needed",
-                    caller, domain
-                );
-            }
+            state.scope_rules.validate(caller, &domain, &facet)?;
 
             let job_id = create_agent_job(
                 &state.k8s,
@@ -609,6 +686,67 @@ fn list_specs() -> String {
     lines.join("\n")
 }
 
+// ── Scope rules loader ────────────────────────────────────────────────────────
+
+async fn load_scope_rules(fondament_url: &str) -> ScopeRules {
+    let client = reqwest::Client::new();
+    let skill_ids = [
+        "caissa/scope-org-orchestrator",
+        "caissa/scope-component-orchestrator",
+    ];
+    let mut rules = Vec::new();
+
+    for skill_id in &skill_ids {
+        let url = format!("{}/raw/{}@latest", fondament_url, skill_id);
+        let result = client
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await;
+
+        match result {
+            Ok(resp) if resp.status().is_success() => {
+                if let Ok(text) = resp.text().await {
+                    match serde_yaml::from_str::<SkillFile>(&text) {
+                        Ok(skill) => {
+                            if let Some(dispatcher) = skill.rules.and_then(|r| r.dispatcher) {
+                                if let Some(ia) = dispatcher.invoke_agent {
+                                    if let Some(caller_id) = ia.caller_identity {
+                                        rules.push(ScopeRule {
+                                            caller_identity: caller_id,
+                                            allowed_facets: ia.allowed_facets,
+                                            domain_must_match_caller: ia.domain_must_match_caller,
+                                        });
+                                    } else if ia.domain_must_match_caller {
+                                        // Component rule: applies to all callers not otherwise matched
+                                        rules.push(ScopeRule {
+                                            caller_identity: "*".to_string(),
+                                            allowed_facets: None,
+                                            domain_must_match_caller: true,
+                                        });
+                                    }
+                                    tracing::info!("loaded scope rule from {}", skill_id);
+                                }
+                            }
+                        }
+                        Err(e) => tracing::warn!("failed to parse skill {}: {}", skill_id, e),
+                    }
+                }
+            }
+            Ok(resp) => tracing::warn!("skill {} returned {}", skill_id, resp.status()),
+            Err(e) => tracing::warn!("failed to fetch skill {}: {}", skill_id, e),
+        }
+    }
+
+    if rules.is_empty() {
+        tracing::warn!("no scope rules loaded from fondament-server — using hardcoded defaults");
+    } else {
+        tracing::info!("loaded {} scope rule(s) from fondament-server", rules.len());
+    }
+
+    ScopeRules(rules)
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub async fn run(port: u16) -> anyhow::Result<()> {
@@ -620,14 +758,19 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         .unwrap_or_else(|_| "http://farga.occitan-system.svc.cluster.local:7500".into());
     let farga_mcp_url = std::env::var("FARGA_MCP_URL")
         .unwrap_or_else(|_| "http://farga.occitan-system.svc.cluster.local:7500/mcp".into());
+    let fondament_url = std::env::var("FONDAMENT_URL")
+        .unwrap_or_else(|_| "http://fondament.occitan-system.svc.cluster.local:7800".into());
 
     let k8s = Client::try_default().await
         .map_err(|e| anyhow::anyhow!("k8s client init failed: {}", e))?;
+
+    let scope_rules = Arc::new(load_scope_rules(&fondament_url).await);
 
     tracing::info!("dispatcher starting on :{}", port);
     tracing::info!("agent image: {}", agent_image);
     tracing::info!("agents namespace: {}", agents_namespace);
     tracing::info!("farga: {}", farga_url);
+    tracing::info!("fondament: {}", fondament_url);
 
     let state = DispatchState {
         k8s: Arc::new(k8s),
@@ -635,6 +778,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         agents_namespace,
         farga_url,
         farga_mcp_url,
+        scope_rules,
     };
 
     let app = Router::new()
