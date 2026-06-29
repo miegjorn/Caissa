@@ -103,6 +103,10 @@ fn tool_list() -> Value {
                         "session_id": {
                             "type": "string",
                             "description": "Session identifier. The agent writes its result as a Farga Signal under this project name. Use a unique ID per invocation so you can retrieve the result."
+                        },
+                        "caller": {
+                            "type": "string",
+                            "description": "Identity of the calling agent. Required for scope enforcement. Use 'guilhem' for the org agent; use the component name (e.g. 'farga', 'gardian') for component agents. Scope rules: guilhem may only invoke facet=architect; a component agent may only invoke its own domain."
                         }
                     },
                     "required": ["domain", "facet", "task", "session_id"]
@@ -191,6 +195,23 @@ async fn call_tool(state: &DispatchState, name: &str, args: &Value) -> anyhow::R
             anyhow::ensure!(!facet.is_empty(), "facet is required");
             anyhow::ensure!(!task.is_empty(), "task is required");
             anyhow::ensure!(!session_id.is_empty(), "session_id is required");
+
+            let caller = args["caller"].as_str().unwrap_or("");
+            if caller == "guilhem" {
+                anyhow::ensure!(
+                    facet == "architect",
+                    "scope violation: guilhem may only invoke facet=architect (got '{}'); \
+                     route work to component agents via nervi_publish instead",
+                    facet
+                );
+            } else if !caller.is_empty() {
+                anyhow::ensure!(
+                    domain == caller,
+                    "scope violation: {} may only invoke agents in its own domain (got domain='{}'); \
+                     pass the puck back to Guilhem via nervi_publish if cross-component coordination is needed",
+                    caller, domain
+                );
+            }
 
             let job_id = create_agent_job(
                 &state.k8s,
