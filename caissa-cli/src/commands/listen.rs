@@ -99,10 +99,10 @@ impl SidecarProcess {
         })
     }
 
-    async fn send(&mut self, sender: &str, content: &str) -> anyhow::Result<String> {
+    async fn send(&mut self, room_id: &str, sender: &str, content: &str) -> anyhow::Result<String> {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
-        let msg = serde_json::json!({ "sender": sender, "content": content });
+        let msg = serde_json::json!({ "room_id": room_id, "sender": sender, "content": content });
         let line = serde_json::to_string(&msg)?;
         self.stdin.write_all(line.as_bytes()).await?;
         self.stdin.write_all(b"\n").await?;
@@ -953,7 +953,7 @@ async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::
     // same room serialise on process_arc's Mutex; different rooms run freely.
     let reply = {
         let mut process = process_arc.lock().await;
-        process.send(&req.sender, &req.content).await?
+        process.send(&req.room_id, &req.sender, &req.content).await?
     };
 
     // Phase 3: update last_activity under the outer lock (brief).
@@ -1437,7 +1437,7 @@ async fn run_turn(state: &ListenState, req: &TurnReq) -> anyhow::Result<String> 
     // Single-shot: spawn, send the assembled context as one user message from
     // "amassada", then tear the process down regardless of outcome.
     let mut process = SidecarProcess::spawn(&init).await?;
-    let result = process.send("amassada", &req.context).await;
+    let result = process.send("", "amassada", &req.context).await;
     process.kill();
     result
 }
