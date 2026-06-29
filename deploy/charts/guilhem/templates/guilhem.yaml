@@ -124,6 +124,7 @@ data:
     farga_mcp_url = "http://farga.occitan-system.svc.cluster.local:7500/mcp"
     dispatcher_mcp_url = "http://dispatcher.agents.svc.cluster.local:9090/mcp"
     charradissa_mcp_url = "http://charradissa.occitan-system.svc.cluster.local:8448/mcp"
+    nervi_mcp_url = "http://nervi-mcp.occitan-system.svc.cluster.local:8080/mcp"
     # Haiku for routine chronicle runs — cheapest model, right for observation tasks.
     # Override: CHRONICLE_MODEL env or set chronicle_model here for a different model.
     chronicle_model = "claude-haiku-4-5-20251001"
