@@ -21,7 +21,37 @@ impl SkillRef {
     }
 }
 
-#[derive(Debug, Deserialize)]
+/// A single tool entry in a Fondament tool allowlist.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct ToolEntry {
+    pub id: String,
+    pub kind: String,
+    #[serde(default)]
+    pub server: Option<String>,
+    pub tool: Option<String>,
+}
+
+/// The tool allowlist section of a Fondament definition.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct FondamentToolSet {
+    #[serde(default)]
+    pub always_on: Vec<ToolEntry>,
+}
+
+/// Convert a `ToolEntry` to the Claude tool name format.
+/// MCP tools become `mcp__<server>__<tool>` ; builtin tools use `tool` or `id`.
+pub fn tool_to_claude_name(entry: &ToolEntry) -> String {
+    match entry.kind.as_str() {
+        "mcp" => format!(
+            "mcp__{}__{}",
+            entry.server.as_deref().unwrap_or(""),
+            entry.tool.as_deref().unwrap_or(&entry.id)
+        ),
+        _ => entry.tool.clone().unwrap_or_else(|| entry.id.clone()),
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
 pub struct FondamentDef {
     pub id: String,
     pub kind: String,
@@ -35,6 +65,13 @@ pub struct FondamentDef {
     /// older definitions without this field default to an empty list.
     #[serde(default)]
     pub modifiers: Vec<String>,
+    /// Named model assignments (e.g. `matrix: claude-opus-4-5`). Overrides
+    /// ListenState defaults when non-empty.
+    #[serde(default)]
+    pub models: std::collections::HashMap<String, String>,
+    /// Tool allowlists declared in the definition.
+    #[serde(default)]
+    pub tools: FondamentToolSet,
 }
 
 impl FondamentDef {
@@ -298,6 +335,7 @@ mod tests {
             context: "You are an application architect.".into(),
             skills: vec![],
             modifiers: vec![],
+            ..Default::default()
         };
         let md = assemble_workspace_md(Some(&domain), Some(&facet), Some("## Current state"));
         assert!(md.contains("# Domain: Farga"));
@@ -330,6 +368,7 @@ mod tests {
             context: "You are a test agent.\n\n".into(),
             skills: vec![],
             modifiers: vec![],
+            ..Default::default()
         };
         let md = assemble_image_claude_md(&def);
         assert!(!md.ends_with('\n'));

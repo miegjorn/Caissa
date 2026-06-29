@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::collections::HashMap;
 use caissa_core::config::load_config;
-use caissa_core::agent::load_fondament_def;
+use caissa_core::agent::{load_fondament_def, tool_to_claude_name};
 use super::handoff::{is_handoff_message, parse_handoff_message, HandoffRequest};
 
 #[derive(Clone)]
@@ -267,7 +267,7 @@ async fn handle_chronicle(
 
     let prompt = req
         .prompt
-        .unwrap_or_else(|| build_chronicle_prompt(&req.reason, &state.farga_project));
+        .unwrap_or_else(|| build_chronicle_prompt(&state.fondament_path, &req.reason, &state.farga_project));
 
     tokio::spawn(async move {
         match run_chronicle(&state, &prompt).await {
@@ -309,7 +309,7 @@ async fn run_sre_alert(state: &ListenState) -> anyhow::Result<()> {
     let mcp_path = std::env::temp_dir().join("guilhem-sre-alert-mcp.json");
     std::fs::write(&mcp_path, &mcp_config)?;
 
-    let prompt = build_sre_alert_prompt();
+    let prompt = build_sre_alert_prompt(&state.fondament_path);
 
     let output = tokio::process::Command::new("claude")
         .args([
@@ -336,7 +336,7 @@ async fn run_sre_alert(state: &ListenState) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn build_sre_alert_prompt() -> String {
+fn build_sre_alert_prompt(fondament_path: &str) -> String {
     format!(r###"You are Guilhem de Tudela, org agent. The SRE watchdog has detected health anomalies.
 
 Your job: read the alerts, identify which component owns each failure, dispatch a targeted
@@ -387,14 +387,27 @@ Write a summary signal to Farga:
 - source: "guilhem-sre-dispatch"
 - content: "Dispatched SRE alerts to: <list>. Anomalies: <brief summary>. Timestamp: <now>"
 "###,
-        constraint = guilhem_dispatch_constraint(),
+        constraint = guilhem_dispatch_constraint(fondament_path),
     )
 }
 
 /// Constraint block injected at the top of every Guilhem prompt.
-/// Guilhem's failure mode is doing implementation work himself instead of dispatching.
-/// This block makes the boundary explicit and repeatable across all prompts.
-fn guilhem_dispatch_constraint() -> &'static str {
+/// Loaded from Fondament skill YAML when available; hardcoded fallback for local dev.
+fn guilhem_dispatch_constraint(fondament_path: &str) -> String {
+    let skill_path = std::path::Path::new(fondament_path)
+        .join("definitions/skills/caissa/scope-org-orchestrator.yaml");
+    if let Ok(text) = std::fs::read_to_string(&skill_path) {
+        #[derive(serde::Deserialize)]
+        struct SkillRules { prompt_constraint: Option<String> }
+        #[derive(serde::Deserialize)]
+        struct SkillFile { rules: Option<SkillRules> }
+        if let Ok(skill) = serde_yaml::from_str::<SkillFile>(&text) {
+            if let Some(constraint) = skill.rules.and_then(|r| r.prompt_constraint) {
+                return constraint;
+            }
+        }
+    }
+    // Hardcoded fallback (used in dev when Fondament checkout is absent)
     r#"## DISPATCH CONSTRAINT — read before acting
 
 You are an orchestrator. You observe, classify, and route. You do NOT implement.
@@ -427,10 +440,10 @@ If you catch yourself about to write code or spawn a code-writing agent: stop.
 Formulate the task precisely and publish it via nervi_publish to `occitan.dispatch.<component>`.
 
 ---
-"#
+"#.to_string()
 }
 
-fn build_chronicle_prompt(reason: &str, project: &str) -> String {
+fn build_chronicle_prompt(fondament_path: &str, reason: &str, project: &str) -> String {
     format!(
         r#"Chronicle trigger: {reason}
 
@@ -470,7 +483,7 @@ instance) to understand where the stack stands.
 "#,
         reason = reason,
         project = project,
-        constraint = guilhem_dispatch_constraint(),
+        constraint = guilhem_dispatch_constraint(fondament_path),
     )
 }
 
@@ -546,7 +559,7 @@ async fn run_backlog_review(state: &ListenState) -> anyhow::Result<()> {
     let mcp_path = std::env::temp_dir().join("guilhem-backlog-mcp.json");
     std::fs::write(&mcp_path, &mcp_config)?;
 
-    let prompt = build_backlog_review_prompt(&state.farga_project);
+    let prompt = build_backlog_review_prompt(&state.fondament_path, &state.farga_project);
 
     let output = tokio::process::Command::new("claude")
         .args([
@@ -622,7 +635,7 @@ async fn run_backlog_review(state: &ListenState) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn build_backlog_review_prompt(project: &str) -> String {
+fn build_backlog_review_prompt(fondament_path: &str, project: &str) -> String {
     format!(
         r#"You are Guilhem de Tudela, org agent for the Occitan stack. This is a scheduled
 backlog review run for the miegjorn GitHub organisation.
@@ -666,7 +679,7 @@ Your written response IS the review — keep it crisp and actionable, not exhaus
 Today's date is available via `date` in Bash.
 "#,
         project = project,
-        constraint = guilhem_dispatch_constraint(),
+        constraint = guilhem_dispatch_constraint(fondament_path),
     )
 }
 
@@ -702,7 +715,7 @@ async fn run_dream(state: &ListenState) -> anyhow::Result<()> {
     let mcp_path = std::env::temp_dir().join("guilhem-dream-mcp.json");
     std::fs::write(&mcp_path, &mcp_config)?;
 
-    let prompt = build_dream_prompt(&state.farga_project);
+    let prompt = build_dream_prompt(&state.fondament_path, &state.farga_project);
 
     let output = tokio::process::Command::new("claude")
         .args([
@@ -775,7 +788,7 @@ async fn run_dream(state: &ListenState) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn build_dream_prompt(project: &str) -> String {
+fn build_dream_prompt(fondament_path: &str, project: &str) -> String {
     format!(
         r###"You are Guilhem de Tudela, org agent for the Occitan stack. This is the nightly
 dream consolidation run. A dream has three phases — follow them in order.
@@ -911,7 +924,7 @@ own sake; it is how the stack avoids mistaking inertia for wisdom.
 Do not just narrate what you did. Chronicle what the stack is becoming.
 "###,
         project = project,
-        constraint = guilhem_dispatch_constraint(),
+        constraint = guilhem_dispatch_constraint(fondament_path),
     )
 }
 
@@ -1183,7 +1196,7 @@ async fn run_dispatch(state: &ListenState) -> anyhow::Result<()> {
     let mcp_path = std::env::temp_dir().join("guilhem-dispatch-mcp.json");
     std::fs::write(&mcp_path, &mcp_config)?;
 
-    let prompt = build_dispatch_prompt();
+    let prompt = build_dispatch_prompt(&state.fondament_path);
 
     let output = tokio::process::Command::new("claude")
         .args([
@@ -1210,7 +1223,7 @@ async fn run_dispatch(state: &ListenState) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn build_dispatch_prompt() -> String {
+fn build_dispatch_prompt(fondament_path: &str) -> String {
     format!(
         r###"You are Guilhem de Tudela, org agent and active dispatcher for the Occitan stack.
 
@@ -1299,7 +1312,7 @@ Remember: dispatching is not implementation. You formulate the task precisely an
 to the right agent. The agent orchestrates; you review and approve.
 "###,
         today = chrono::Utc::now().format("%Y-%m-%d"),
-        constraint = guilhem_dispatch_constraint(),
+        constraint = guilhem_dispatch_constraint(fondament_path),
     )
 }
 
@@ -1343,8 +1356,8 @@ async fn run_mission_pulse(state: &ListenState) -> anyhow::Result<()> {
     let mcp_path = std::env::temp_dir().join("guilhem-mission-pulse-mcp.json");
     std::fs::write(&mcp_path, &mcp_config)?;
 
-    let prompt = build_mission_pulse_prompt();
-    let tools = guilhem_allowed_tools().join(",");
+    let prompt = build_mission_pulse_prompt(&state.fondament_path);
+    let tools = guilhem_allowed_tools(&state.fondament_path).join(",");
 
     let output = tokio::process::Command::new("claude")
         .args([
@@ -1375,7 +1388,7 @@ async fn run_mission_pulse(state: &ListenState) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn build_mission_pulse_prompt() -> String {
+fn build_mission_pulse_prompt(fondament_path: &str) -> String {
     format!(r###"You are Guilhem de Tudela, org agent for the Occitan stack. This is the weekly
 mission pulse — the moment where you set direction for the coming week.
 
@@ -1498,7 +1511,7 @@ Write a signal to Farga (mcp__farga__write_signal):
 
 Your written response IS the mission summary — it is recorded to Farga automatically.
 "###,
-        constraint = guilhem_dispatch_constraint(),
+        constraint = guilhem_dispatch_constraint(fondament_path),
     )
 }
 
@@ -1537,8 +1550,8 @@ async fn run_intake(state: &ListenState, description: &str) -> anyhow::Result<()
     let mcp_path = std::env::temp_dir().join("guilhem-intake-mcp.json");
     std::fs::write(&mcp_path, &mcp_config)?;
 
-    let prompt = build_intake_prompt(description);
-    let tools = guilhem_allowed_tools().join(",");
+    let prompt = build_intake_prompt(&state.fondament_path, description);
+    let tools = guilhem_allowed_tools(&state.fondament_path).join(",");
 
     let output = tokio::process::Command::new("claude")
         .args([
@@ -1569,7 +1582,7 @@ async fn run_intake(state: &ListenState, description: &str) -> anyhow::Result<()
     Ok(())
 }
 
-fn build_intake_prompt(description: &str) -> String {
+fn build_intake_prompt(fondament_path: &str, description: &str) -> String {
     format!(r###"You are Guilhem de Tudela, org agent for the Occitan stack. A new project is
 being onboarded onto the platform. Your job is to create all the real-estate the project
 needs to run as a first-class citizen on the Occitan platform.
@@ -1712,7 +1725,7 @@ Write a `write_artifact` signal with:
 
 Your written response IS the intake summary — recorded to Farga automatically.
 "###,
-        constraint = guilhem_dispatch_constraint(),
+        constraint = guilhem_dispatch_constraint(fondament_path),
         description = description,
     )
 }
@@ -1785,12 +1798,16 @@ async fn handle_matrix_reply(
 ///
 /// Falls back to a bare prompt if the definition file is missing (e.g. outside
 /// the built image, in local dev without a Fondament checkout at fondament_path).
-fn resolve_guilhem_prompt(fondament_path: &str, generation: &str, room_id: &str) -> (String, Vec<String>) {
-    let (role_context, skills) = match load_fondament_def(fondament_path, generation) {
-        Ok(def) => { let skills = def.skill_ids(); (def.context, skills) }
+fn resolve_guilhem_prompt(fondament_path: &str, generation: &str, room_id: &str) -> (String, Vec<String>, std::collections::HashMap<String, String>) {
+    let (role_context, skills, models) = match load_fondament_def(fondament_path, generation) {
+        Ok(def) => {
+            let skills = def.skill_ids();
+            let models = def.models;
+            (def.context, skills, models)
+        }
         Err(e) => {
             tracing::warn!("fondament def not found for '{}' at '{}': {}; using bare prompt", generation, fondament_path, e);
-            (String::from("You are Guilhem, the org agent for the Occitan stack."), vec![])
+            (String::from("You are Guilhem, the org agent for the Occitan stack."), vec![], std::collections::HashMap::new())
         }
     };
 
@@ -1836,7 +1853,7 @@ The dispatcher will reject any other combination — this is a hard guard, not a
         context_graph_preamble,
         room_id,
     );
-    (prompt, skills)
+    (prompt, skills, models)
 }
 
 async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::Result<String> {
@@ -1865,11 +1882,12 @@ async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::
             // The sidecar process is long-lived (one per room, reused across
             // messages) — always attach the full tool/MCP set so capability
             // doesn't get frozen at whatever the room's first message needed.
-            let (system_prompt, skills) = resolve_guilhem_prompt(&state.fondament_path, &state.generation, &req.room_id);
+            let (system_prompt, skills, def_models) = resolve_guilhem_prompt(&state.fondament_path, &state.generation, &req.room_id);
+            let model = def_models.get("matrix").cloned().unwrap_or_else(|| state.matrix_model.clone());
             let init = SidecarInit {
                 system_prompt,
-                model: state.matrix_model.clone(),
-                allowed_tools: guilhem_allowed_tools(),
+                model,
+                allowed_tools: guilhem_allowed_tools(&state.fondament_path),
                 skills,
                 mcp_servers: guilhem_mcp_servers(state),
             };
@@ -1917,9 +1935,19 @@ fn guilhem_mcp_servers(state: &ListenState) -> serde_json::Value {
     })
 }
 
-/// The tool allow-list granted to every Guilhem sidecar session. Kept as a
-/// single source of truth so the Matrix and `/turn` paths can't drift apart.
-fn guilhem_allowed_tools() -> Vec<String> {
+/// The tool allow-list granted to every Guilhem sidecar session. Loaded from
+/// the Fondament `guilhem` definition when available; hardcoded fallback for
+/// local dev without a Fondament checkout.
+fn guilhem_allowed_tools(fondament_path: &str) -> Vec<String> {
+    if let Ok(def) = load_fondament_def(fondament_path, "guilhem") {
+        let from_def: Vec<String> = def.tools.always_on.iter()
+            .map(tool_to_claude_name)
+            .collect();
+        if !from_def.is_empty() {
+            return from_def;
+        }
+    }
+    // Hardcoded fallback (used in dev when Fondament checkout is absent)
     // Guilhem's role: read, formulate, dispatch, review — not implement in component repos.
     // Edit/Write are intentionally absent — code changes flow through component agents via dispatch.
     // WebSearch/WebFetch enable adversarial challenge evaluation and PR research.
@@ -2071,20 +2099,30 @@ fn component_mcp_servers(state: &ListenState) -> serde_json::Value {
     })
 }
 
-fn component_allowed_tools() -> Vec<&'static str> {
+fn component_allowed_tools(fondament_path: &str, component: &str) -> Vec<String> {
+    let def_name = format!("{}-agent", component);
+    if let Ok(def) = load_fondament_def(fondament_path, &def_name) {
+        let from_def: Vec<String> = def.tools.always_on.iter()
+            .map(tool_to_claude_name)
+            .collect();
+        if !from_def.is_empty() {
+            return from_def;
+        }
+    }
+    // Hardcoded fallback
     vec![
-        "Bash",
-        "mcp__farga__search_signals",
-        "mcp__farga__read_context",
-        "mcp__farga__write_signal",
-        "mcp__farga__update_component_todo",
-        "mcp__farga__read_context_node",
-        "mcp__farga__list_context_nodes",
-        "mcp__dispatcher__invoke_agent",
-        "mcp__dispatcher__get_agent_result",
-        "mcp__dispatcher__list_agent_specs",
-        "mcp__nervi__nervi_publish",
-        "mcp__nervi__nervi_subscribe",
+        "Bash".to_string(),
+        "mcp__farga__search_signals".to_string(),
+        "mcp__farga__read_context".to_string(),
+        "mcp__farga__write_signal".to_string(),
+        "mcp__farga__update_component_todo".to_string(),
+        "mcp__farga__read_context_node".to_string(),
+        "mcp__farga__list_context_nodes".to_string(),
+        "mcp__dispatcher__invoke_agent".to_string(),
+        "mcp__dispatcher__get_agent_result".to_string(),
+        "mcp__dispatcher__list_agent_specs".to_string(),
+        "mcp__nervi__nervi_publish".to_string(),
+        "mcp__nervi__nervi_subscribe".to_string(),
     ]
 }
 
@@ -2098,7 +2136,7 @@ async fn run_component_agent(state: &ListenState, component: &str, payload: &str
 
     let persona_context = load_component_persona(state, component);
     let prompt = build_component_agent_prompt(component, &state.farga_project, payload, &persona_context);
-    let tools = component_allowed_tools().join(",");
+    let tools = component_allowed_tools(&state.fondament_path, component).join(",");
 
     let output = tokio::process::Command::new("claude")
         .args([
@@ -2708,7 +2746,7 @@ async fn run_turn(state: &ListenState, req: &TurnReq) -> anyhow::Result<String> 
     let init = SidecarInit {
         system_prompt: req.system_prompt.clone(),
         model: req.model.clone(),
-        allowed_tools: guilhem_allowed_tools(),
+        allowed_tools: guilhem_allowed_tools(&state.fondament_path),
         skills,
         mcp_servers: guilhem_mcp_servers(state),
     };
