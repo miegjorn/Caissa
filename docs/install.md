@@ -409,6 +409,52 @@ kubectl exec -n agents deployment/guilhem -- \
     -d '{"room_id":"!test:occitane.guilhem","sender":"@pierre-luc:occitane.guilhem","content":"hello guilhem","history":[]}'
 ```
 
+### The Handoff Bridge — mechanical dispatch from #coordination
+
+A message to `POST /matrix/reply` whose content matches `@guilhem handoff …` is
+intercepted **before** the conversational flow: it spawns no sidecar and consumes no
+conversational context — it is a mechanical dispatch. The wire format is:
+
+```text
+@guilhem handoff domain:<X> facet:<Y> task:"<description>"
+```
+
+Optional fields: `context_ref:<farga_project>`, `farga_project:<id>`,
+`allowed_tools:<tool1,tool2>`. Valid domains are `farga | gardian | amassada |
+charradissa | cor | caissa | fondament | occitan`; valid facets are `architect |
+developer | qa | infra | db | security`. An unknown domain/facet, an empty task, or a
+missing required field is rejected with an explanatory Matrix message and nothing is
+dispatched.
+
+On a valid order Guilhem, in sequence:
+
+1. derives a unique, traceable `session_id` (`handoff-<domain>-<facet>-<short-uuid>`),
+2. writes a Farga **traceability signal** under that session's project *before* dispatch
+   (`{session_id, parent_room, task, dispatched_to, triggered_by, timestamp}`, source
+   `guilhem-handoff-trace`) — so the parent context survives even a failed dispatch,
+3. calls the dispatcher's `invoke_agent` over JSON-RPC (`dispatcher_mcp_url`),
+4. replies immediately `Dispatch lancé — job_id: <id>, session: <id>`,
+5. polls `get_agent_result` with geometric backoff (5s→60s) up to a 10-minute timeout in a
+   detached task, then posts exactly one terminal message to the room:
+   - **completed** → a ≤500-char result summary plus a Farga link
+     (`<farga_url>/signals/recent?project=<session_id>`),
+   - **failed** → the reason plus the `get_agent_result` resumption command, and a Farga
+     error signal (`{job_id, session_id, reason, timestamp}`, source `guilhem-handoff-error`),
+   - **timeout** → `Job <id> timeout — reprise: mcp__dispatcher__get_agent_result job_id:<id>`,
+     and the same error signal.
+
+No handoff terminates silently — every outcome (rejection, dispatch failure, success,
+timeout) produces a Matrix message. Out-of-band result/timeout/error posts use the Synapse
+admin API (`SYNAPSE_URL` + `SYNAPSE_ADMIN_TOKEN`), the same path as the SRE/backlog/dream
+posts. Try one:
+
+```bash
+kubectl exec -n agents deployment/guilhem -- \
+  curl -s -X POST http://localhost:8080/matrix/reply \
+    -H 'Content-Type: application/json' \
+    -d '{"room_id":"!coord:occitane.guilhem","sender":"@pierre-luc:occitane.guilhem","content":"@guilhem handoff domain:gardian facet:developer task:\"add a smoke test for two-hop resolution\""}'
+```
+
 ### Guilhem's GitHub / GitLab access
 
 The agent image ships `git`, `gh`, and `glab`. The Guilhem pod's initContainer pulls the
