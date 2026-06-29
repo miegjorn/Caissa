@@ -205,9 +205,18 @@ spec:
                   SUBJECT="occitan.issues.${COMPONENT}"
                   echo "Syncing issues from ${REPO} to ${SUBJECT}"
 
-                  # Fetch open issues as JSON
-                  ISSUES=$(gh issue list --repo "${REPO}" --state open \
-                    --json number,title,body,labels,url --limit 50 2>/dev/null || echo "[]")
+                  # Only fetch issues created or updated in the last 25 hours so the
+                  # daily CronJob doesn't re-queue stale work the agent already processed.
+                  # 25h (not 24h) gives a one-hour overlap to survive scheduling jitter.
+                  SINCE=$(date -u -d '25 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+                       || date -u -v-25H +%Y-%m-%dT%H:%M:%SZ)
+                  echo "Fetching issues updated since ${SINCE}"
+
+                  # gh api supports the GitHub `since` query param (updated_at >= since).
+                  ISSUES=$(gh api \
+                    "repos/${REPO}/issues?state=open&since=${SINCE}&per_page=50" \
+                    --jq '[.[] | select(.pull_request == null) | {number,title,body,labels,url}]' \
+                    2>/dev/null || echo "[]")
 
                   COUNT=$(echo "${ISSUES}" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))")
                   echo "Found ${COUNT} open issues"

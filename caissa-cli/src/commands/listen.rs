@@ -915,7 +915,33 @@ cat README.md 2>/dev/null || echo "No README.md found"
 
 ---
 
-## PHASE 3: RECONCILE AND CREATE ISSUES
+## PHASE 3: CLOSE RESOLVED ISSUES
+
+Before creating new issues, check whether previously-filed scan issues are now resolved.
+This prevents the queue from accumulating stale work.
+
+```bash
+# List open issues previously created by the scan (last 90 days)
+gh issue list --repo miegjorn/{repo} --state open --label "technical-debt" \
+  --search "weekly code scan" --json number,title,body --limit 30
+```
+
+For each open scan issue:
+1. Extract the specific problem described (file path, symbol name, pattern).
+2. Check whether it still exists in the cloned repo:
+   ```bash
+   grep -rn "<pattern from issue>" /tmp/scan-{component}/src/ 2>/dev/null | head -5
+   ```
+3. If the problem is **gone**: close the issue with evidence:
+   ```bash
+   gh issue close <number> --repo miegjorn/{repo} \
+     --comment "Resolved: pattern no longer present in codebase as of $(date +%Y-%m-%d). Closing."
+   ```
+4. If it still exists: leave it open (do not re-comment).
+
+---
+
+## PHASE 4: RECONCILE AND CREATE ISSUES
 
 For each gap you identify, before creating an issue:
 
@@ -945,7 +971,7 @@ say so and file nothing.
 
 ---
 
-## PHASE 4: WRITE FARGA SIGNAL
+## PHASE 5: WRITE FARGA SIGNAL
 
 Write a scan signal using `mcp__farga__write_signal`:
 - project: "{component}"

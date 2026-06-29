@@ -75,7 +75,7 @@ data:
            description="Issue #{number} → PR #{pr_number}: {pr_title}", source_room_id="!AftizZpcNgfIUgqFQt:occitane.guilhem")`
          - STOP processing — do not pull the next issue. You will receive a Matrix message
            in your room when the human approves or rejects.
-      6. On approval: call `nervi_subscribe` again to pull the next issue and continue.
+      6. On approval: merge the open PR (`gh pr merge --squash --repo miegjorn/{Repo} {pr_number}`), write a Farga signal confirming completion, then call `nervi_subscribe` again to pull the next issue.
       7. On rejection: write a signal to Farga explaining why the issue was skipped, then
          pull the next issue.
 
@@ -170,7 +170,7 @@ data:
            description="Issue #{number} → PR #{pr_number}: {pr_title}", source_room_id="!hNBIrYgqZxPsnBntbY:occitane.guilhem")`
          - STOP processing — do not pull the next issue. You will receive a Matrix message
            in your room when the human approves or rejects.
-      6. On approval: call `nervi_subscribe` again to pull the next issue and continue.
+      6. On approval: merge the open PR (`gh pr merge --squash --repo miegjorn/{Repo} {pr_number}`), write a Farga signal confirming completion, then call `nervi_subscribe` again to pull the next issue.
       7. On rejection: write a signal to Farga explaining why the issue was skipped, then
          pull the next issue.
 
@@ -264,7 +264,7 @@ data:
            description="Issue #{number} → PR #{pr_number}: {pr_title}", source_room_id="!kIDEzlMzVRRXveGVpL:occitane.guilhem")`
          - STOP processing — do not pull the next issue. You will receive a Matrix message
            in your room when the human approves or rejects.
-      6. On approval: call `nervi_subscribe` again to pull the next issue and continue.
+      6. On approval: merge the open PR (`gh pr merge --squash --repo miegjorn/{Repo} {pr_number}`), write a Farga signal confirming completion, then call `nervi_subscribe` again to pull the next issue.
       7. On rejection: write a signal to Farga explaining why the issue was skipped, then
          pull the next issue.
 
@@ -365,7 +365,7 @@ data:
            description="Issue #{number} → PR #{pr_number}: {pr_title}", source_room_id="!yYNPBBfRcPAMfpyAeB:occitane.guilhem")`
          - STOP processing — do not pull the next issue. You will receive a Matrix message
            in your room when the human approves or rejects.
-      6. On approval: call `nervi_subscribe` again to pull the next issue and continue.
+      6. On approval: merge the open PR (`gh pr merge --squash --repo miegjorn/{Repo} {pr_number}`), write a Farga signal confirming completion, then call `nervi_subscribe` again to pull the next issue.
       7. On rejection: write a signal to Farga explaining why the issue was skipped, then
          pull the next issue.
 
@@ -463,7 +463,7 @@ data:
            description="Issue #{number} → PR #{pr_number}: {pr_title}", source_room_id="!SRtFNNEbgkATYOLktl:occitane.guilhem")`
          - STOP processing — do not pull the next issue. You will receive a Matrix message
            in your room when the human approves or rejects.
-      6. On approval: call `nervi_subscribe` again to pull the next issue and continue.
+      6. On approval: merge the open PR (`gh pr merge --squash --repo miegjorn/{Repo} {pr_number}`), write a Farga signal confirming completion, then call `nervi_subscribe` again to pull the next issue.
       7. On rejection: write a signal to Farga explaining why the issue was skipped, then
          pull the next issue.
 
@@ -560,7 +560,7 @@ data:
            description="Issue #{number} → PR #{pr_number}: {pr_title}", source_room_id="!fquiGtdiWSOUyYhYUV:occitane.guilhem")`
          - STOP processing — do not pull the next issue. You will receive a Matrix message
            in your room when the human approves or rejects.
-      6. On approval: call `nervi_subscribe` again to pull the next issue and continue.
+      6. On approval: merge the open PR (`gh pr merge --squash --repo miegjorn/{Repo} {pr_number}`), write a Farga signal confirming completion, then call `nervi_subscribe` again to pull the next issue.
       7. On rejection: write a signal to Farga explaining why the issue was skipped, then
          pull the next issue.
 
@@ -669,7 +669,7 @@ data:
            description="Issue #{number} → PR #{pr_number}: {pr_title}", source_room_id="!HUzSiveWLbgEsjzIFt:occitane.guilhem")`
          - STOP processing — do not pull the next issue. You will receive a Matrix message
            in your room when the human approves or rejects.
-      6. On approval: call `nervi_subscribe` again to pull the next issue and continue.
+      6. On approval: merge the open PR (`gh pr merge --squash --repo miegjorn/{Repo} {pr_number}`), write a Farga signal confirming completion, then call `nervi_subscribe` again to pull the next issue.
       7. On rejection: write a signal to Farga explaining why the issue was skipped, then
          pull the next issue.
 
@@ -767,7 +767,7 @@ data:
            description="Issue #{number} → PR #{pr_number}: {pr_title}", source_room_id="!tGdWTCTRPPXgnWrhad:occitane.guilhem")`
          - STOP processing — do not pull the next issue. You will receive a Matrix message
            in your room when the human approves or rejects.
-      6. On approval: call `nervi_subscribe` again to pull the next issue and continue.
+      6. On approval: merge the open PR (`gh pr merge --squash --repo miegjorn/{Repo} {pr_number}`), write a Farga signal confirming completion, then call `nervi_subscribe` again to pull the next issue.
       7. On rejection: write a signal to Farga explaining why the issue was skipped, then
          pull the next issue.
 
