@@ -21,3 +21,6 @@ tokio-util = { version = "0.7", features = ["io"] }
 uuid = { version = "1", features = ["v4"] }
 kube = { version = "0.93", features = ["client", "runtime"] }
 k8s-openapi = { version = "0.22", features = ["v1_30"] }
+aws-sdk-s3 = { version = "1", features = [] }
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-credential-types = { version = "1" }
