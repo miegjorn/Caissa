@@ -1,0 +1,6 @@
+apiVersion: v2
+name: fondament
+description: Fondament definition server — serves and validates Fondament agent definitions
+type: application
+version: 0.1.0
+appVersion: "latest"

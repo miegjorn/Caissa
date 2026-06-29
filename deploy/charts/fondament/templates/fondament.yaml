@@ -1,0 +1,104 @@
+---
+# PVC for fondament definitions.
+# Definitions are seeded by running: caissa fondament publish
+# (The publish command pushes definitions to MinIO; fondament-server pulls them from there.)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fondament-data
+  namespace: occitan-system
+  labels:
+    app: fondament
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ .Values.storage }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fondament
+  namespace: occitan-system
+  labels:
+    app: fondament
+spec:
+  replicas: {{ .Values.replicas }}
+  # Single writer for local definitions store — use Recreate to avoid two instances
+  # racing on the PVC during rollouts.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: fondament
+  template:
+    metadata:
+      labels:
+        app: fondament
+    spec:
+      imagePullSecrets:
+        - name: ghcr-creds
+      containers:
+        - name: fondament-server
+          image: "{{ .Values.image }}:{{ .Values.imageTag }}"
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: {{ .Values.port }}
+          env:
+            - name: FONDAMENT_DEFINITIONS_PATH
+              value: {{ .Values.definitionsPath | quote }}
+            - name: FONDAMENT_PORT
+              value: {{ .Values.port | quote }}
+            - name: FARGA_URL
+              value: {{ .Values.fargaUrl | quote }}
+            - name: FONDAMENT_REGISTRY_URL
+              value: {{ .Values.registryUrl | quote }}
+            - name: FONDAMENT_REGISTRY_BUCKET
+              value: {{ .Values.registryBucket | quote }}
+            # S3 credentials for MinIO — shared secret with the minio chart
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: minio-credentials
+                  key: MINIO_ROOT_USER
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-credentials
+                  key: MINIO_ROOT_PASSWORD
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: {{ .Values.definitionsPath }}
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: fondament-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fondament
+  namespace: occitan-system
+  labels:
+    app: fondament
+spec:
+  selector:
+    app: fondament
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.port }}
+      targetPort: {{ .Values.port }}

@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: fondament
+  namespace: argocd
+spec:
+  project: occitan
+  source:
+    repoURL: ssh://git@ssh.github.com:443/miegjorn/Caissa.git
+    targetRevision: main
+    path: deploy/charts/fondament
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: occitan-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

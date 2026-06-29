@@ -1,0 +1,6 @@
+storage: 5Gi
+image: minio/minio
+imageTag: latest
+rootUser: occitan
+rootPassword: occitan-dev   # dev only, overridden in prod via secret
+bucket: fondament-registry
