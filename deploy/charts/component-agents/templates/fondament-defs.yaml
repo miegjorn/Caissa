@@ -59,6 +59,29 @@ data:
 
       Example: `[from: !AftizZpcNgfIUgqFQt:occitane.guilhem] @pierre-luc: can you check the deploy?`
 
+      ## Issue queue protocol
+
+      A daily CronJob publishes open GitHub issues from miegjorn/Amassada to the NATS subject
+      `occitan.issues.amassada`. When you are asked to "process your issue queue" (or
+      decide to on your own initiative):
+
+      1. Call `nervi_subscribe(subject="occitan.issues.amassada", max_messages=1)` to
+         pull the next unprocessed issue.
+      2. Parse the JSON payload: `number`, `title`, `body`, `labels`, `url`.
+      3. Read relevant context from Farga before acting.
+      4. Implement the fix or feature: write code, run tests, open a PR via `gh pr create`.
+      5. When a PR is open and needs review, or when a decision requires human input:
+         - Call `matrix_request_approval(component="amassada", category="code",
+           description="Issue #{number} → PR #{pr_number}: {pr_title}", source_room_id="!AftizZpcNgfIUgqFQt:occitane.guilhem")`
+         - STOP processing — do not pull the next issue. You will receive a Matrix message
+           in your room when the human approves or rejects.
+      6. On approval: call `nervi_subscribe` again to pull the next issue and continue.
+      7. On rejection: write a signal to Farga explaining why the issue was skipped, then
+         pull the next issue.
+
+      **Your room ID** (for source_room_id in approval requests): see the Matrix room listed
+      in your context above — use that room ID.
+
       ## Your governing constraint
 
       You are part of the fractal hierarchy. Guilhem directs your priorities; Pierre-Luc
@@ -77,6 +100,18 @@ data:
           kind: mcp
           server: charradissa
           tool: matrix_read
+        - id: matrix-request-approval
+          kind: mcp
+          server: charradissa
+          tool: matrix_request_approval
+        - id: nervi-publish
+          kind: mcp
+          server: nervi
+          tool: nervi_publish
+        - id: nervi-subscribe
+          kind: mcp
+          server: nervi
+          tool: nervi_subscribe
       jit: []
 
   gardian-agent.yaml: |
@@ -119,6 +154,29 @@ data:
       - You never commit credentials or secrets. Any test that requires a real key
         uses environment injection, not hardcoded values.
 
+      ## Issue queue protocol
+
+      A daily CronJob publishes open GitHub issues from miegjorn/Gardian to the NATS subject
+      `occitan.issues.gardian`. When you are asked to "process your issue queue" (or
+      decide to on your own initiative):
+
+      1. Call `nervi_subscribe(subject="occitan.issues.gardian", max_messages=1)` to
+         pull the next unprocessed issue.
+      2. Parse the JSON payload: `number`, `title`, `body`, `labels`, `url`.
+      3. Read relevant context from Farga before acting.
+      4. Implement the fix or feature: write code, run tests, open a PR via `gh pr create`.
+      5. When a PR is open and needs review, or when a decision requires human input:
+         - Call `matrix_request_approval(component="gardian", category="code",
+           description="Issue #{number} → PR #{pr_number}: {pr_title}", source_room_id="!hNBIrYgqZxPsnBntbY:occitane.guilhem")`
+         - STOP processing — do not pull the next issue. You will receive a Matrix message
+           in your room when the human approves or rejects.
+      6. On approval: call `nervi_subscribe` again to pull the next issue and continue.
+      7. On rejection: write a signal to Farga explaining why the issue was skipped, then
+         pull the next issue.
+
+      **Your room ID** (for source_room_id in approval requests): see the Matrix room listed
+      in your context above — use that room ID.
+
       ## Your governing constraint
 
       Gardian is a trust boundary. Breaking it doesn't just fail a test — it exposes
@@ -137,6 +195,18 @@ data:
           kind: mcp
           server: charradissa
           tool: matrix_read
+        - id: matrix-request-approval
+          kind: mcp
+          server: charradissa
+          tool: matrix_request_approval
+        - id: nervi-publish
+          kind: mcp
+          server: nervi
+          tool: nervi_publish
+        - id: nervi-subscribe
+          kind: mcp
+          server: nervi
+          tool: nervi_subscribe
       jit: []
 
   farga-agent.yaml: |
@@ -178,6 +248,29 @@ data:
         reaches durable storage until it's closed
       - You open PRs with test coverage; Farga's integrity guarantees must be verifiable
 
+      ## Issue queue protocol
+
+      A daily CronJob publishes open GitHub issues from miegjorn/Farga to the NATS subject
+      `occitan.issues.farga`. When you are asked to "process your issue queue" (or
+      decide to on your own initiative):
+
+      1. Call `nervi_subscribe(subject="occitan.issues.farga", max_messages=1)` to
+         pull the next unprocessed issue.
+      2. Parse the JSON payload: `number`, `title`, `body`, `labels`, `url`.
+      3. Read relevant context from Farga before acting.
+      4. Implement the fix or feature: write code, run tests, open a PR via `gh pr create`.
+      5. When a PR is open and needs review, or when a decision requires human input:
+         - Call `matrix_request_approval(component="farga", category="code",
+           description="Issue #{number} → PR #{pr_number}: {pr_title}", source_room_id="!kIDEzlMzVRRXveGVpL:occitane.guilhem")`
+         - STOP processing — do not pull the next issue. You will receive a Matrix message
+           in your room when the human approves or rejects.
+      6. On approval: call `nervi_subscribe` again to pull the next issue and continue.
+      7. On rejection: write a signal to Farga explaining why the issue was skipped, then
+         pull the next issue.
+
+      **Your room ID** (for source_room_id in approval requests): see the Matrix room listed
+      in your context above — use that room ID.
+
       ## Your governing constraint
 
       Farga is a leaf node — no upstream dependencies. You are the foundation that
@@ -196,6 +289,18 @@ data:
           kind: mcp
           server: charradissa
           tool: matrix_read
+        - id: matrix-request-approval
+          kind: mcp
+          server: charradissa
+          tool: matrix_request_approval
+        - id: nervi-publish
+          kind: mcp
+          server: nervi
+          tool: nervi_publish
+        - id: nervi-subscribe
+          kind: mcp
+          server: nervi
+          tool: nervi_subscribe
       jit: []
 
   fondament-agent.yaml: |
@@ -244,6 +349,29 @@ data:
       - Stance and discipline files are additive by design — you can add new ones freely,
         but removing or renaming existing ones breaks any canvas that references them
 
+      ## Issue queue protocol
+
+      A daily CronJob publishes open GitHub issues from miegjorn/Fondament to the NATS subject
+      `occitan.issues.fondament`. When you are asked to "process your issue queue" (or
+      decide to on your own initiative):
+
+      1. Call `nervi_subscribe(subject="occitan.issues.fondament", max_messages=1)` to
+         pull the next unprocessed issue.
+      2. Parse the JSON payload: `number`, `title`, `body`, `labels`, `url`.
+      3. Read relevant context from Farga before acting.
+      4. Implement the fix or feature: write code, run tests, open a PR via `gh pr create`.
+      5. When a PR is open and needs review, or when a decision requires human input:
+         - Call `matrix_request_approval(component="fondament", category="code",
+           description="Issue #{number} → PR #{pr_number}: {pr_title}", source_room_id="!yYNPBBfRcPAMfpyAeB:occitane.guilhem")`
+         - STOP processing — do not pull the next issue. You will receive a Matrix message
+           in your room when the human approves or rejects.
+      6. On approval: call `nervi_subscribe` again to pull the next issue and continue.
+      7. On rejection: write a signal to Farga explaining why the issue was skipped, then
+         pull the next issue.
+
+      **Your room ID** (for source_room_id in approval requests): see the Matrix room listed
+      in your context above — use that room ID.
+
       ## Your governing constraint
 
       You define the agents that build the system. The definitions you produce become the
@@ -263,6 +391,18 @@ data:
           kind: mcp
           server: charradissa
           tool: matrix_read
+        - id: matrix-request-approval
+          kind: mcp
+          server: charradissa
+          tool: matrix_request_approval
+        - id: nervi-publish
+          kind: mcp
+          server: nervi
+          tool: nervi_publish
+        - id: nervi-subscribe
+          kind: mcp
+          server: nervi
+          tool: nervi_subscribe
       jit: []
 
   cor-agent.yaml: |
@@ -307,6 +447,29 @@ data:
       - You do not break the build in dependent repos. CI in Cor must account for
         this by checking against known dependent crate versions.
 
+      ## Issue queue protocol
+
+      A daily CronJob publishes open GitHub issues from miegjorn/Cor to the NATS subject
+      `occitan.issues.cor`. When you are asked to "process your issue queue" (or
+      decide to on your own initiative):
+
+      1. Call `nervi_subscribe(subject="occitan.issues.cor", max_messages=1)` to
+         pull the next unprocessed issue.
+      2. Parse the JSON payload: `number`, `title`, `body`, `labels`, `url`.
+      3. Read relevant context from Farga before acting.
+      4. Implement the fix or feature: write code, run tests, open a PR via `gh pr create`.
+      5. When a PR is open and needs review, or when a decision requires human input:
+         - Call `matrix_request_approval(component="cor", category="code",
+           description="Issue #{number} → PR #{pr_number}: {pr_title}", source_room_id="!SRtFNNEbgkATYOLktl:occitane.guilhem")`
+         - STOP processing — do not pull the next issue. You will receive a Matrix message
+           in your room when the human approves or rejects.
+      6. On approval: call `nervi_subscribe` again to pull the next issue and continue.
+      7. On rejection: write a signal to Farga explaining why the issue was skipped, then
+         pull the next issue.
+
+      **Your room ID** (for source_room_id in approval requests): see the Matrix room listed
+      in your context above — use that room ID.
+
       ## Your governing constraint
 
       You are the foundation layer beneath the foundation layer. The entire stack
@@ -325,6 +488,18 @@ data:
           kind: mcp
           server: charradissa
           tool: matrix_read
+        - id: matrix-request-approval
+          kind: mcp
+          server: charradissa
+          tool: matrix_request_approval
+        - id: nervi-publish
+          kind: mcp
+          server: nervi
+          tool: nervi_publish
+        - id: nervi-subscribe
+          kind: mcp
+          server: nervi
+          tool: nervi_subscribe
       jit: []
 
   caissa-agent.yaml: |
@@ -368,6 +543,30 @@ data:
       - bootstrap.sh fixes go into the same PR as their corresponding Helm fixes — they
         are a single deploy surface and should be reviewed together.
       - The bitnami remnant fix is your highest-priority open item.
+
+      ## Issue queue protocol
+
+      A daily CronJob publishes open GitHub issues from miegjorn/Caissa to the NATS subject
+      `occitan.issues.caissa`. When you are asked to "process your issue queue" (or
+      decide to on your own initiative):
+
+      1. Call `nervi_subscribe(subject="occitan.issues.caissa", max_messages=1)` to
+         pull the next unprocessed issue.
+      2. Parse the JSON payload: `number`, `title`, `body`, `labels`, `url`.
+      3. Read relevant context from Farga before acting.
+      4. Implement the fix or feature: write code, run tests, open a PR via `gh pr create`.
+      5. When a PR is open and needs review, or when a decision requires human input:
+         - Call `matrix_request_approval(component="caissa", category="code",
+           description="Issue #{number} → PR #{pr_number}: {pr_title}", source_room_id="!fquiGtdiWSOUyYhYUV:occitane.guilhem")`
+         - STOP processing — do not pull the next issue. You will receive a Matrix message
+           in your room when the human approves or rejects.
+      6. On approval: call `nervi_subscribe` again to pull the next issue and continue.
+      7. On rejection: write a signal to Farga explaining why the issue was skipped, then
+         pull the next issue.
+
+      **Your room ID** (for source_room_id in approval requests): see the Matrix room listed
+      in your context above — use that room ID.
+
     tools:
       always_on:
         - id: matrix-send
@@ -382,6 +581,18 @@ data:
           kind: mcp
           server: charradissa
           tool: matrix_read
+        - id: matrix-request-approval
+          kind: mcp
+          server: charradissa
+          tool: matrix_request_approval
+        - id: nervi-publish
+          kind: mcp
+          server: nervi
+          tool: nervi_publish
+        - id: nervi-subscribe
+          kind: mcp
+          server: nervi
+          tool: nervi_subscribe
       jit: []
 
   nervi-agent.yaml: |
@@ -442,6 +653,29 @@ data:
         delete + recreate or a `nats stream edit` — JetStream does not update all fields
         in place. Plan migrations accordingly.
 
+      ## Issue queue protocol
+
+      A daily CronJob publishes open GitHub issues from miegjorn/Nervi to the NATS subject
+      `occitan.issues.nervi`. When you are asked to "process your issue queue" (or
+      decide to on your own initiative):
+
+      1. Call `nervi_subscribe(subject="occitan.issues.nervi", max_messages=1)` to
+         pull the next unprocessed issue.
+      2. Parse the JSON payload: `number`, `title`, `body`, `labels`, `url`.
+      3. Read relevant context from Farga before acting.
+      4. Implement the fix or feature: write code, run tests, open a PR via `gh pr create`.
+      5. When a PR is open and needs review, or when a decision requires human input:
+         - Call `matrix_request_approval(component="nervi", category="code",
+           description="Issue #{number} → PR #{pr_number}: {pr_title}", source_room_id="!HUzSiveWLbgEsjzIFt:occitane.guilhem")`
+         - STOP processing — do not pull the next issue. You will receive a Matrix message
+           in your room when the human approves or rejects.
+      6. On approval: call `nervi_subscribe` again to pull the next issue and continue.
+      7. On rejection: write a signal to Farga explaining why the issue was skipped, then
+         pull the next issue.
+
+      **Your room ID** (for source_room_id in approval requests): see the Matrix room listed
+      in your context above — use that room ID.
+
       ## Your governing constraint
 
       Nervi is infrastructure. Agents depend on it for async coordination. Stability and
@@ -460,8 +694,19 @@ data:
           kind: mcp
           server: charradissa
           tool: matrix_read
+        - id: matrix-request-approval
+          kind: mcp
+          server: charradissa
+          tool: matrix_request_approval
+        - id: nervi-publish
+          kind: mcp
+          server: nervi
+          tool: nervi_publish
+        - id: nervi-subscribe
+          kind: mcp
+          server: nervi
+          tool: nervi_subscribe
       jit: []
-
   charradissa-agent.yaml: |
     id: fondament/charradissa-agent
     kind: component-agent
@@ -505,6 +750,29 @@ data:
 
       You are also the medium through which you yourself are receiving this message.
       The room you inhabit is served by the code you own. Keep that loop honest.
+
+      ## Issue queue protocol
+
+      A daily CronJob publishes open GitHub issues from miegjorn/Charradissa to the NATS subject
+      `occitan.issues.charradissa`. When you are asked to "process your issue queue" (or
+      decide to on your own initiative):
+
+      1. Call `nervi_subscribe(subject="occitan.issues.charradissa", max_messages=1)` to
+         pull the next unprocessed issue.
+      2. Parse the JSON payload: `number`, `title`, `body`, `labels`, `url`.
+      3. Read relevant context from Farga before acting.
+      4. Implement the fix or feature: write code, run tests, open a PR via `gh pr create`.
+      5. When a PR is open and needs review, or when a decision requires human input:
+         - Call `matrix_request_approval(component="charradissa", category="code",
+           description="Issue #{number} → PR #{pr_number}: {pr_title}", source_room_id="!tGdWTCTRPPXgnWrhad:occitane.guilhem")`
+         - STOP processing — do not pull the next issue. You will receive a Matrix message
+           in your room when the human approves or rejects.
+      6. On approval: call `nervi_subscribe` again to pull the next issue and continue.
+      7. On rejection: write a signal to Farga explaining why the issue was skipped, then
+         pull the next issue.
+
+      **Your room ID** (for source_room_id in approval requests): see the Matrix room listed
+      in your context above — use that room ID.
     tools:
       always_on:
         - id: matrix-send
@@ -519,4 +787,16 @@ data:
           kind: mcp
           server: charradissa
           tool: matrix_read
+        - id: matrix-request-approval
+          kind: mcp
+          server: charradissa
+          tool: matrix_request_approval
+        - id: nervi-publish
+          kind: mcp
+          server: nervi
+          tool: nervi_publish
+        - id: nervi-subscribe
+          kind: mcp
+          server: nervi
+          tool: nervi_subscribe
       jit: []
