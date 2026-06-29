@@ -242,6 +242,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         .route("/trigger/backlog-review", post(handle_backlog_review))
         .route("/trigger/dream", post(handle_dream))
         .route("/trigger/dispatch", post(handle_dispatch))
+        .route("/trigger/mission-pulse", post(handle_mission_pulse))
         .route("/trigger/scan", post(handle_scan))
         .route("/matrix/reply", post(handle_matrix_reply))
         .route("/turn", post(handle_turn))
@@ -334,10 +335,12 @@ async fn run_sre_alert(state: &ListenState) -> anyhow::Result<()> {
 }
 
 fn build_sre_alert_prompt() -> String {
-    r###"You are Guilhem de Tudela, org agent. The SRE watchdog has detected health anomalies.
+    format!(r###"You are Guilhem de Tudela, org agent. The SRE watchdog has detected health anomalies.
 
 Your job: read the alerts, identify which component owns each failure, dispatch a targeted
-repair task to that component's Matrix room via NATS-backed alert reading.
+repair task to that component's Nervi dispatch subject.
+
+{constraint}
 
 ---
 
@@ -367,21 +370,49 @@ If alerts ARE found, for each anomaly identify the responsible component:
 ## STEP 3 — Dispatch
 
 For each affected component, publish a repair task to its Nervi dispatch subject:
-nervi_publish(subject="occitan.dispatch.<component>", payload=JSON.stringify({
+nervi_publish(subject="occitan.dispatch.<component>", payload=JSON.stringify({{
   "type": "sre-repair",
   "anomaly": "<specific error description>",
   "task": "Investigate: check /health endpoint, review recent pod logs for errors, identify root cause. If a code fix is needed, open a PR following the standard issue→implement→PR→approval flow.",
   "class": 1,
   "dispatched_by": "guilhem-sre",
   "review_required": false
-}))
+}}))
 
 ## STEP 4 — Record
 
 Write a summary signal to Farga:
 - source: "guilhem-sre-dispatch"
 - content: "Dispatched SRE alerts to: <list>. Anomalies: <brief summary>. Timestamp: <now>"
-"###.to_string()
+"###,
+        constraint = guilhem_dispatch_constraint(),
+    )
+}
+
+/// Constraint block injected at the top of every Guilhem prompt.
+/// Guilhem's failure mode is doing implementation work himself instead of dispatching.
+/// This block makes the boundary explicit and repeatable across all prompts.
+fn guilhem_dispatch_constraint() -> &'static str {
+    r#"## DISPATCH CONSTRAINT — read before acting
+
+You are an orchestrator. You observe, classify, and route. You do NOT implement.
+
+**Permitted Bash uses:**
+- `gh issue list/create/view/edit` — read and manage GitHub issues and Initiatives/Epics
+- `gh pr list/view` — check PR status
+- `cat`, `ls`, `find`, `date`, `git log/status/diff` — read context
+
+**Not permitted — dispatch to component agents instead:**
+- Editing source files (no `sed`, `awk`, `patch`, `echo > file.rs`)
+- Building or testing (`cargo`, `npm`, `make`, `pytest`, `go build`)
+- Creating PRs that contain code changes
+- Running migrations or deployments
+
+If you catch yourself about to write code: stop.
+Formulate the task precisely and publish it via nervi_publish to `occitan.dispatch.<component>`.
+
+---
+"#
 }
 
 fn build_chronicle_prompt(reason: &str, project: &str) -> String {
@@ -390,6 +421,8 @@ fn build_chronicle_prompt(reason: &str, project: &str) -> String {
 
 You are Guilhem de Tudela, chronicler of the Occitan stack. This is a scheduled
 chronicle run for project "{project}".
+
+{constraint}
 
 You have the Farga MCP server attached. Ground your chronicle in real state — use its
 read tools before writing:
@@ -412,7 +445,10 @@ recorded to Farga automatically, so do not try to post it yourself.
 
 Be faithful, not verbose. The chronicle is for future agents (including your next
 instance) to understand where the stack stands.
-"#
+"#,
+        reason = reason,
+        project = project,
+        constraint = guilhem_dispatch_constraint(),
     )
 }
 
@@ -569,6 +605,8 @@ fn build_backlog_review_prompt(project: &str) -> String {
         r#"You are Guilhem de Tudela, org agent for the Occitan stack. This is a scheduled
 backlog review run for the miegjorn GitHub organisation.
 
+{constraint}
+
 ## What to do
 
 1. **Fetch open issues** across all miegjorn repos using Bash:
@@ -605,7 +643,8 @@ backlog review run for the miegjorn GitHub organisation.
 Your written response IS the review — keep it crisp and actionable, not exhaustive.
 Today's date is available via `date` in Bash.
 "#,
-        project = project
+        project = project,
+        constraint = guilhem_dispatch_constraint(),
     )
 }
 
@@ -718,6 +757,8 @@ fn build_dream_prompt(project: &str) -> String {
     format!(
         r###"You are Guilhem de Tudela, org agent for the Occitan stack. This is the nightly
 dream consolidation run. A dream has three phases — follow them in order.
+
+{constraint}
 
 ---
 
@@ -842,7 +883,8 @@ own sake; it is how the stack avoids mistaking inertia for wisdom.
 **Your written response** is the dream report — concise, substantive, forward-looking.
 Do not just narrate what you did. Chronicle what the stack is becoming.
 "###,
-        project = project
+        project = project,
+        constraint = guilhem_dispatch_constraint(),
     )
 }
 
@@ -1147,6 +1189,8 @@ The nightly dream has completed. Your job now is to translate the dream's synthe
 adversarial challenge proposals into specific, actionable work — and route it to the right
 component agents. This is where synthesis becomes motion.
 
+{constraint}
+
 ---
 
 ## STEP 1 — Load system-defence axioms
@@ -1222,6 +1266,205 @@ Remember: dispatching is not implementation. You formulate the task precisely an
 to the right agent. The agent orchestrates; you review and approve.
 "###,
         today = chrono::Utc::now().format("%Y-%m-%d"),
+        constraint = guilhem_dispatch_constraint(),
+    )
+}
+
+// ── Mission pulse ─────────────────────────────────────────────────────────────
+//
+// POST /trigger/mission-pulse — weekly CronJob (Monday 05:00 UTC).
+//
+// Guilhem reads the stack trajectory, manages GitHub Initiatives (stack-level goals)
+// and Epics (component-level missions). For each Initiative without Epics, he
+// consults the relevant component's architect facet via the Dispatcher to decompose
+// it. The result is a coherent Initiative→Epic hierarchy that drives the week's work.
+// Component agents consume Epics from the issue-sync Nervi feed and adopt them as
+// their mission for the period.
+//
+// Label convention (created and maintained by Guilhem):
+//   initiative — stack-level goal, owned by Guilhem
+//   epic       — component-level mission, owned by component agent
+//   story      — work package, owned by component agent (created when adopting an Epic)
+//   task       — executable order, dispatched to specialist agents
+
+async fn handle_mission_pulse(
+    State(state): State<Arc<ListenState>>,
+    Json(req): Json<TriggerReq>,
+) -> StatusCode {
+    tracing::info!("mission-pulse trigger received: {}", req.reason);
+
+    tokio::spawn(async move {
+        match run_mission_pulse(&state).await {
+            Ok(_) => tracing::info!("mission-pulse complete"),
+            Err(e) => tracing::error!("mission-pulse failed: {}", e),
+        }
+    });
+
+    StatusCode::ACCEPTED
+}
+
+async fn run_mission_pulse(state: &ListenState) -> anyhow::Result<()> {
+    let mcp_config = serde_json::to_string(&serde_json::json!({
+        "mcpServers": guilhem_mcp_servers(state)
+    }))?;
+    let mcp_path = std::env::temp_dir().join("guilhem-mission-pulse-mcp.json");
+    std::fs::write(&mcp_path, &mcp_config)?;
+
+    let prompt = build_mission_pulse_prompt();
+    let tools = guilhem_allowed_tools().join(",");
+
+    let output = tokio::process::Command::new("claude")
+        .args([
+            "--print",
+            &prompt,
+            "--model",
+            &state.dream_model,
+            "--mcp-config",
+            mcp_path.to_str().unwrap(),
+            "--allowed-tools",
+            &tools,
+        ])
+        .env("FARGA_URL", &state.farga_url)
+        .env("FARGA_PROJECT", &state.farga_project)
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("mission-pulse claude exited: {}", stderr);
+    }
+
+    let response = String::from_utf8_lossy(&output.stdout).to_string();
+    if !response.trim().is_empty() {
+        post_signal(state, &response).await?;
+    }
+    tracing::info!("mission-pulse complete");
+    Ok(())
+}
+
+fn build_mission_pulse_prompt() -> String {
+    format!(r###"You are Guilhem de Tudela, org agent for the Occitan stack. This is the weekly
+mission pulse — the moment where you set direction for the coming week.
+
+{constraint}
+
+## Your role in the hierarchy
+
+Initiatives (stack-level goals) are yours to own. You create them, maintain them,
+and break them into Epics for each component. Component agents own their Epics — once
+you hand an Epic to a component, the component decides how to execute it (as Stories and Tasks).
+
+Label convention for GitHub issues:
+- `initiative` — stack-level goal spanning one or more components (you create)
+- `epic` — component-level mission for one cycle (you create after architect consultation)
+- `story` — work package within an Epic (component agent creates when adopting the Epic)
+- `task` — executable order (specialist agents create or receive)
+
+---
+
+## STEP 1 — Read stack context
+
+1a. Read Farga context: mcp__farga__read_context (project: "occitan")
+1b. Search for recent mission signals: mcp__farga__search_signals with source="mission-pulse"
+    (last 30 days — understand what direction was set last week)
+1c. Search for dream trajectory notes: mcp__farga__search_signals with source="dream"
+    (last 7 days — what is the stack building toward?)
+
+---
+
+## STEP 2 — Inventory open Initiatives
+
+For each component repo, list open Initiatives:
+```
+for repo in Gardian Fondament Farga Amassada Charradissa Cor Caissa Nervi Occitan; do
+  echo "=== $repo initiatives ==="
+  gh issue list --repo miegjorn/$repo --label initiative --state open \
+    --json number,title,body,createdAt,labels --limit 20
+done
+```
+
+Also list open Epics to see which Initiatives already have decomposition:
+```
+for repo in Gardian Fondament Farga Amassada Charradissa Cor Caissa Nervi; do
+  echo "=== $repo epics ==="
+  gh issue list --repo miegjorn/$repo --label epic --state open \
+    --json number,title,body,createdAt,labels --limit 30
+done
+```
+
+---
+
+## STEP 3 — Evaluate and create Initiatives
+
+Based on dream trajectory notes and current Farga context:
+- Does the trajectory imply major work not captured as an Initiative?
+- Are any open Initiatives already complete or obsolete?
+
+**Create a new Initiative** when the trajectory implies a significant direction not yet
+formally captured. Use the Occitan meta-repo as the primary home for cross-component
+Initiatives:
+```
+gh issue create --repo miegjorn/Occitan \
+  --title "<concise initiative title>" \
+  --body "## Motivation\n<why this matters for the stack trajectory>\n\n## Success criteria\n<what done looks like>\n\n## Primary components\n<which components are involved>\n\n## Horizon\n<rough timeline: this week / this month / this quarter>" \
+  --label "initiative"
+```
+
+Keep it lean: at most 1-2 new Initiatives per pulse. Quality over completeness.
+Close obsolete Initiatives with a comment explaining why they are done or superseded.
+
+---
+
+## STEP 4 — Architect consultation and Epic decomposition
+
+For each open Initiative that has **no Epics yet** (no issues in component repos referencing
+this Initiative with the `epic` label):
+
+1. Identify the primary component(s) this Initiative concerns.
+
+2. For each primary component, invoke the architect via Dispatcher:
+   mcp__dispatcher__invoke_agent with:
+   - domain: "<component>" (e.g. "farga", "gardian")
+   - facet: "architect"
+   - task: "Decompose this Initiative into Epics for the <component> component.
+
+     Initiative: '<title>'
+     Context: '<body summary>'
+
+     Return 2-4 Epics. Each Epic should be:
+     - Independently deliverable (a component agent can own and execute it alone)
+     - Meaningfully valuable (not just a sub-task)
+     - Clearly scoped to <component>
+
+     For each Epic: title, 2-3 sentence description. Be concrete."
+
+3. Poll for results with mcp__dispatcher__get_agent_result.
+
+4. For each Epic the architect proposes, create it in the component's GitHub repo:
+   ```
+   gh issue create --repo miegjorn/<Component> \
+     --title "<epic title>" \
+     --body "## What\n<epic description>\n\n## Why\n<how this serves the Initiative>\n\n## Parent Initiative\nmiegjorn/Occitan#<initiative_number>\n\n## Definition of done\n<concrete completion criteria>" \
+     --label "epic"
+   ```
+
+---
+
+## STEP 5 — Write mission summary to Farga
+
+Write a signal to Farga (mcp__farga__write_signal):
+- source: "mission-pulse"
+- content: Structured summary:
+  - Date of pulse
+  - Active Initiatives: list with repo#number and one-line description
+  - New Initiatives created this pulse (with rationale)
+  - New Epics created this pulse (component + Initiative parent)
+  - Trajectory statement: one paragraph — where is the stack heading this week?
+  - Open questions for Pierre-Luc (if any — Class 3+ items only)
+
+Your written response IS the mission summary — it is recorded to Farga automatically.
+"###,
+        constraint = guilhem_dispatch_constraint(),
     )
 }
 
@@ -1641,48 +1884,97 @@ Each entry has: `"type"` ("issue" or "dispatch") and `"data"` containing the pay
 
 You are the orchestrator for {component}. You do NOT implement code directly —
 you read each message, decide what work it requires, and spawn the right specialist
-agents via the Dispatcher MCP. Follow your component persona above.
+agents via the Dispatcher MCP.
+
+## COMPONENT AGENT CONSTRAINT
+
+Same rule as Guilhem: you orchestrate, you do not implement.
+Permitted: mcp__dispatcher__invoke_agent, nervi_publish, Farga reads/writes, Bash for `gh`.
+Not permitted: editing source files, running builds, committing code.
+
+---
 
 ### Step 1 — Read Farga context
 
 Call mcp__farga__read_context (project: "{project}") to orient yourself.
-Call mcp__farga__search_signals (project: "{project}") to see recent activity.
+Call mcp__farga__search_signals (project: "{project}") to see recent activity and
+your current mission (source="mission-pulse" or source="component-mission").
 
-### Step 2 — Process each message
+### Step 2 — Process each message by issue label
 
-**For issue messages** (GitHub issues synced from the repo):
-- Issue data includes: number, title, body, labels, url
-- Skip if already tracked in recent Farga signals (check source="component-agent").
-- Assess: is the issue scoped to this component alone? Is it clear and actionable?
-  - Code change → invoke `{component}/developer` via mcp__dispatcher__invoke_agent
-  - Tests needed → invoke `{component}/qa`
-  - Documentation drift → invoke `{component}/librarian`
-  - Review needed before merge → invoke `{component}/reviewer`
-  - Multiple concerns → spawn in sequence, not in parallel
-  - Ambiguous scope or cross-component → escalate (see below)
+**`epic` label — Mission assignment from Guilhem:**
+This is a component-level goal for your current cycle. Your response:
+1. Read and understand the Epic fully (body, parent Initiative reference, definition of done).
+2. Consult your architect: invoke `{component}/architect` via Dispatcher with task:
+   "Break this Epic into Stories for execution. Epic: '<title>'. Body: '<body>'.
+   Return 3-6 Stories: each independently testable, clearly scoped, with concrete acceptance criteria."
+3. Wait for architect result (mcp__dispatcher__get_agent_result).
+4. Create each Story as a GitHub issue:
+   ```
+   gh issue create --repo miegjorn/<Component> \
+     --title "<story title>" \
+     --body "<story description>\n\nAcceptance criteria:\n- <criterion>\n\nParent Epic: <repo>#<number>" \
+     --label "story"
+   ```
+5. Write your adopted mission to Farga: source="component-mission",
+   content="Epic adopted: '<title>'. Stories created: <list>. This defines {component}'s direction this cycle."
 
-**For dispatch messages** (tasks published by Guilhem):
-- The payload includes: task, context, outcome, class, review_required
-- Class 1: dispatch autonomously to the appropriate specialist agent.
-- Class 2: dispatch, then write a Farga signal source="component-class2-ready" so Guilhem
-  can review before the resulting PR is merged.
+**`story` label — Work package to decompose:**
+1. Read the Story and its parent Epic (from the body's "Parent Epic" reference).
+2. Determine what specialist(s) are needed:
+   - Code implementation → invoke `{component}/developer`
+   - Tests or quality gate → invoke `{component}/qa`
+   - Architecture decision → invoke `{component}/architect`
+   - Documentation → invoke `{component}/librarian`
+3. Create Task issues for each piece:
+   ```
+   gh issue create --repo miegjorn/<Component> \
+     --title "<task title>" \
+     --body "<task description>\n\nParent Story: <repo>#<number>" \
+     --label "task"
+   ```
+4. Dispatch each task to the appropriate specialist via mcp__dispatcher__invoke_agent.
+
+**`task` label — Executable order:**
+Dispatch directly to the appropriate specialist agent. No decomposition needed.
+- Code → `{component}/developer`
+- Tests → `{component}/qa`
+- Review → `{component}/reviewer`
+- Docs → `{component}/librarian`
+
+**No label or `bug`/`enhancement` — treat as Story:**
+Assess, decompose if needed, dispatch appropriately.
+
+**`initiative` label — Escalate to Guilhem:**
+Initiatives are Guilhem's domain. Write a Farga signal source="component-escalation":
+"Received an Initiative issue directly — routing to Guilhem: <title>."
+Do not process it yourself.
+
+---
+
+**For dispatch messages** (tasks published by Guilhem via `occitan.dispatch.{component}`):
+- The payload includes: type, task, context, outcome, class, review_required
+- Class 1: dispatch autonomously to the appropriate specialist.
+- Class 2: dispatch, then write Farga signal source="component-class2-ready" for Guilhem review.
+
+---
 
 ### Escalation threshold
 
-Escalate to Guilhem (write Farga signal source="component-escalation") when:
+Escalate to Guilhem (source="component-escalation") when:
 - Work touches interfaces other components depend on
 - Confidence is below 70%
-- The issue implies architectural change
+- The issue or Epic implies architectural change beyond this component
 
-For routine, well-scoped work within the component's domain: act autonomously.
+For routine, well-scoped work within {component}'s domain: act autonomously.
 
 ### Step 3 — Record results
 
 Write a summary signal to Farga:
 - source: "component-agent"
-- content: "Processed N messages. Dispatched: <list>. Skipped: <reasons>. Escalated: <list>."
+- content: "Processed N messages. Epics adopted: <list>. Stories created: <list>. Tasks dispatched: <list>. Skipped: <reasons>. Escalated: <list>."
 
-Your written response IS the summary — it is recorded to Farga automatically.
+Your written response IS the summary — recorded to Farga automatically.
 "###,
         persona_context = persona_context,
         component = component,

@@ -46,6 +46,11 @@ dispatch:
   # Post-dream dispatch — fires 1h after dream so Farga signals are ready.
   # Guilhem reads dream report + adversarial challenges and routes to component agents.
   schedule: "0 4 * * *"
+missionPulse:
+  # Weekly mission pulse — Monday 05:00 UTC.
+  # Guilhem manages the Initiative→Epic hierarchy and sets direction for the week.
+  # Component agents consume Epics via issue-sync (06:00 UTC same day).
+  schedule: "0 5 * * 1"
 resources:
   requests:
     cpu: 50m
