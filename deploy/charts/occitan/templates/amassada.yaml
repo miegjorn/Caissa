@@ -113,6 +113,21 @@ data:
       - superpowers:verification-before-completion
       - superpowers:using-git-worktrees
 ---
+# Project registry for multi-tenant dispatch. Mounted at /config and pointed to
+# by AMASSADA_PROJECTS_PATH (see values.yaml amassada.env). Edit .Values.amassada.projects
+# to onboard project agents; an empty registry is valid (Guilhem runs via the
+# org-session canvas fallback).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: amassada-projects
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+data:
+  projects.toml: |
+{{ .Values.amassada.projects | indent 4 }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -165,6 +180,9 @@ spec:
             - name: fondament-defs
               mountPath: /fondament/definitions/fondament
               readOnly: true
+            - name: projects
+              mountPath: /config
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /health
@@ -181,6 +199,9 @@ spec:
         - name: fondament-defs
           configMap:
             name: amassada-fondament-defs
+        - name: projects
+          configMap:
+            name: amassada-projects
 ---
 apiVersion: v1
 kind: Service
