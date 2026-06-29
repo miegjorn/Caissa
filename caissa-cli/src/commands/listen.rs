@@ -992,6 +992,8 @@ fn guilhem_allowed_tools() -> Vec<String> {
         "mcp__charradissa__matrix_invite".to_string(),
         "mcp__charradissa__matrix_kick".to_string(),
         "mcp__charradissa__matrix_get_dm".to_string(),
+        "mcp__charradissa__matrix_leave".to_string(),
+        "mcp__charradissa__matrix_read".to_string(),
     ]
 }
 
