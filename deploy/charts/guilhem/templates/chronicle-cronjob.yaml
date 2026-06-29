@@ -1,0 +1,46 @@
+{{- if .Values.chronicleSchedule }}
+# Periodic chronicle — Guilhem reads Farga signals and synthesizes a concise
+# observation entry, keeping the stack's memory current for the nightly dream.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: guilhem-chronicle
+  namespace: agents
+  labels:
+    app.kubernetes.io/name: guilhem-chronicle
+    app.kubernetes.io/part-of: occitan
+spec:
+  schedule: {{ .Values.chronicleSchedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 600
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: chronicle-trigger
+              image: curlimages/curl:8.11.0
+              command:
+                - curl
+                - --fail
+                - --silent
+                - --show-error
+                - --max-time
+                - "60"
+                - -X
+                - POST
+                - http://guilhem.agents.svc.cluster.local:8080/trigger/chronicle
+                - -H
+                - "Content-Type: application/json"
+                - -d
+                - '{"reason":"scheduled chronicle"}'
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 16Mi
+                limits:
+                  memory: 32Mi
+{{- end }}
