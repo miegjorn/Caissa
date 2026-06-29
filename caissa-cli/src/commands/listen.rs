@@ -1823,6 +1823,10 @@ read its context node before acting. Key nodes:\n\
   [<component>][architecture]     — design summary, interfaces, invariants\n\
 \n\
 On your FIRST message in this session, call list_context_nodes to orient yourself.\n\
+\n\
+DISPATCH RULE: invoke_agent requires caller=\"guilhem\" and facet=\"architect\" only.\n\
+For all code work, use nervi_publish to occitan.dispatch.<component>.\n\
+The dispatcher will reject any other combination — this is a hard guard, not a suggestion.\n\
 --- end context graph ---";
 
     let prompt = format!(

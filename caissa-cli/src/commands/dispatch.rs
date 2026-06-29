@@ -106,10 +106,10 @@ fn tool_list() -> Value {
                         },
                         "caller": {
                             "type": "string",
-                            "description": "Identity of the calling agent. Required for scope enforcement. Use 'guilhem' for the org agent; use the component name (e.g. 'farga', 'gardian') for component agents. Scope rules: guilhem may only invoke facet=architect; a component agent may only invoke its own domain."
+                            "description": "Identity of the calling agent. REQUIRED. Use 'guilhem' for the org agent; use the component name (e.g. 'farga', 'gardian') for component agents. Scope rules: guilhem may only invoke facet=architect; a component agent may only invoke its own domain."
                         }
                     },
-                    "required": ["domain", "facet", "task", "session_id"]
+                    "required": ["domain", "facet", "task", "session_id", "caller"]
                 }
             },
             {
@@ -197,6 +197,10 @@ async fn call_tool(state: &DispatchState, name: &str, args: &Value) -> anyhow::R
             anyhow::ensure!(!session_id.is_empty(), "session_id is required");
 
             let caller = args["caller"].as_str().unwrap_or("");
+            anyhow::ensure!(
+                !caller.is_empty(),
+                "caller is required — pass caller='guilhem' (org agent) or caller='<component>' (component agent)"
+            );
             if caller == "guilhem" {
                 anyhow::ensure!(
                     facet == "architect",
@@ -204,7 +208,7 @@ async fn call_tool(state: &DispatchState, name: &str, args: &Value) -> anyhow::R
                      route work to component agents via nervi_publish instead",
                     facet
                 );
-            } else if !caller.is_empty() {
+            } else {
                 anyhow::ensure!(
                     domain == caller,
                     "scope violation: {} may only invoke agents in its own domain (got domain='{}'); \
