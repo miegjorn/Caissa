@@ -49,6 +49,7 @@ struct ListenState {
     amassada_url: String,
     dispatcher_mcp_url: String,
     charradissa_mcp_url: String,
+    nervi_mcp_url: String,
     fondament_path: String,
     generation: String,
     /// Matrix room ID for SRE alert posts. Empty string = alerting disabled.
@@ -222,6 +223,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         amassada_url: config.amassada_url,
         dispatcher_mcp_url: config.dispatcher_mcp_url,
         charradissa_mcp_url: config.charradissa_mcp_url,
+        nervi_mcp_url: config.nervi_mcp_url,
         fondament_path: config.fondament_path,
         generation: config.generation,
         sre_matrix_room_id: std::env::var("SRE_MATRIX_ROOM_ID").unwrap_or_default(),
@@ -972,6 +974,7 @@ fn guilhem_mcp_servers(state: &ListenState) -> serde_json::Value {
         "farga": { "type": "http", "url": state.farga_mcp_url },
         "dispatcher": { "type": "http", "url": state.dispatcher_mcp_url },
         "charradissa": { "type": "http", "url": state.charradissa_mcp_url },
+        "nervi": { "type": "http", "url": state.nervi_mcp_url },
     })
 }
 
@@ -994,6 +997,9 @@ fn guilhem_allowed_tools() -> Vec<String> {
         "mcp__charradissa__matrix_get_dm".to_string(),
         "mcp__charradissa__matrix_leave".to_string(),
         "mcp__charradissa__matrix_read".to_string(),
+        "mcp__nervi__nervi_publish".to_string(),
+        "mcp__nervi__nervi_subscribe".to_string(),
+        "mcp__charradissa__matrix_request_approval".to_string(),
     ]
 }
 

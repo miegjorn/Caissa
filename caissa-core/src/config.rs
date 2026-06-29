@@ -31,6 +31,9 @@ pub struct CaissaConfig {
     /// matrix_get_dm so agents can act in Matrix without holding their own Matrix token.
     #[serde(default = "default_charradissa_mcp_url")]
     pub charradissa_mcp_url: String,
+    /// Nervi NATS JetStream MCP endpoint — exposes nervi_publish and nervi_subscribe.
+    #[serde(default = "default_nervi_mcp_url")]
+    pub nervi_mcp_url: String,
     /// Model used for non-interactive chronicle runs (`caissa listen`).
     /// Defaults to Haiku — fast, cheap, right for routine observation.
     /// Override per-deployment: chronicle_model = "claude-sonnet-4-6"
@@ -81,6 +84,10 @@ fn default_charradissa_mcp_url() -> String {
     "http://charradissa.occitan-system.svc.cluster.local:8448/mcp".into()
 }
 
+fn default_nervi_mcp_url() -> String {
+    "http://nervi-mcp.occitan-system.svc.cluster.local:8080/mcp".into()
+}
+
 fn default_chronicle_model() -> String {
     "claude-haiku-4-5-20251001".into()
 }
@@ -114,6 +121,7 @@ impl Default for CaissaConfig {
             farga_mcp_url: default_farga_mcp_url(),
             dispatcher_mcp_url: default_dispatcher_mcp_url(),
             charradissa_mcp_url: default_charradissa_mcp_url(),
+            nervi_mcp_url: default_nervi_mcp_url(),
             chronicle_model: default_chronicle_model(),
             matrix_model: default_matrix_model(),
             dream_model: default_dream_model(),

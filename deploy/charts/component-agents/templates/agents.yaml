@@ -21,6 +21,7 @@ data:
     generation = "{{ .name }}-agent"
     farga_mcp_url = {{ $.Values.farga.url | quote | replace "\"" "" | printf "%s/mcp" | quote }}
     dispatcher_mcp_url = "http://dispatcher.agents.svc.cluster.local:9090/mcp"
+    nervi_mcp_url = "http://nervi-mcp.occitan-system.svc.cluster.local:8080/mcp"
     chronicle_model = "claude-haiku-4-5-20251001"
 
     [sandbox]
@@ -146,4 +147,101 @@ spec:
     - port: 8080
       targetPort: 8080
       name: webhook
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .name }}-issue-sync
+  namespace: agents
+  labels:
+    app.kubernetes.io/name: {{ .name }}-issue-sync
+    app.kubernetes.io/part-of: occitan
+    occitan/component: {{ .name }}
+spec:
+  schedule: "0 6 * * *"
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          initContainers:
+            - name: fetch-tokens
+              image: openbao/openbao:latest
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  export BAO_ADDR=http://openbao.occitan-system.svc.cluster.local:8200
+                  GH=$(bao kv get -field=value secret/occitan/github)
+                  umask 077
+                  cat > /creds/tokens.env <<EOF
+                  export GH_TOKEN='$GH'
+                  export GITHUB_TOKEN='$GH'
+                  EOF
+                  echo "tokens written"
+              env:
+                - name: BAO_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: openbao
+                      key: token
+              volumeMounts:
+                - name: creds
+                  mountPath: /creds
+          containers:
+            - name: issue-sync
+              image: ghcr.io/cli/cli:latest
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  [ -f /creds/tokens.env ] && . /creds/tokens.env
+                  set -eu
+                  COMPONENT="{{ .name }}"
+                  REPO="miegjorn/{{ .name | title }}"
+                  NERVI_MCP="http://nervi-mcp.occitan-system.svc.cluster.local:8080/mcp"
+                  SUBJECT="occitan.issues.${COMPONENT}"
+                  echo "Syncing issues from ${REPO} to ${SUBJECT}"
+
+                  # Fetch open issues as JSON
+                  ISSUES=$(gh issue list --repo "${REPO}" --state open \
+                    --json number,title,body,labels,url --limit 50 2>/dev/null || echo "[]")
+
+                  COUNT=$(echo "${ISSUES}" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))")
+                  echo "Found ${COUNT} open issues"
+
+                  # Publish each issue individually to NATS via Nervi MCP
+                  echo "${ISSUES}" | python3 -c "
+                  import json, sys, urllib.request, urllib.error
+                  issues = json.load(sys.stdin)
+                  nervi = sys.argv[1]
+                  subject = sys.argv[2]
+                  for issue in issues:
+                      payload = json.dumps(issue)
+                      body = json.dumps({
+                          'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+                          'params': {'name': 'nervi_publish', 'arguments': {'subject': subject, 'payload': payload}}
+                      }).encode()
+                      req = urllib.request.Request(nervi, data=body, headers={'Content-Type': 'application/json'}, method='POST')
+                      try:
+                          resp = urllib.request.urlopen(req, timeout=10)
+                          print(f'Published issue #{issue[\"number\"]}: {issue[\"title\"][:50]}')
+                      except Exception as e:
+                          print(f'Failed to publish issue #{issue[\"number\"]}: {e}', file=sys.stderr)
+                  " "${NERVI_MCP}" "${SUBJECT}"
+
+                  echo "Issue sync complete for ${COMPONENT}"
+              volumeMounts:
+                - name: creds
+                  mountPath: /creds
+          volumes:
+            - name: creds
+              emptyDir:
+                medium: Memory
+          {{- with $.Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
 {{- end }}

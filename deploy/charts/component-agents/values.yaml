@@ -15,6 +15,9 @@ resources:
 farga:
   url: "http://farga.occitan-system.svc.cluster.local:7500"
 
+nervi:
+  mcpUrl: "http://nervi-mcp.occitan-system.svc.cluster.local:8080/mcp"
+
 # One entry per Occitan component.
 # - name:   component identifier, becomes the Farga project and pod name
 # - roomId: Matrix room ID this agent inhabits (room already exists in Synapse)
