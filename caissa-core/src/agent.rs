@@ -3,6 +3,24 @@ use std::path::Path;
 
 // ── Fondament definition structs ─────────────────────────────────────────────
 
+/// A skill reference — either a plain string or a versioned object.
+/// Matches the SkillRef schema in fondament-core.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum SkillRef {
+    Simple(String),
+    Versioned { id: String, version: String },
+}
+
+impl SkillRef {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Simple(s) => s,
+            Self::Versioned { id, .. } => id,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct FondamentDef {
     pub id: String,
@@ -10,13 +28,20 @@ pub struct FondamentDef {
     pub default_model: Option<String>,
     pub context: String,
     #[serde(default)]
-    pub skills: Vec<String>,
+    pub skills: Vec<SkillRef>,
     /// Reasoning/discipline modifiers declared by the definition (e.g.
     /// "deconstructive"). Currently informational — formalizes what Caissa's
     /// listen.rs hardcodes — but available for future tooling. Non-breaking:
     /// older definitions without this field default to an empty list.
     #[serde(default)]
     pub modifiers: Vec<String>,
+}
+
+impl FondamentDef {
+    /// Returns skill IDs as plain strings (for backwards-compatible callers).
+    pub fn skill_ids(&self) -> Vec<String> {
+        self.skills.iter().map(|s| s.id().to_string()).collect()
+    }
 }
 
 #[derive(Debug, Deserialize)]

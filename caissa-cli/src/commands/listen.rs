@@ -1787,7 +1787,7 @@ async fn handle_matrix_reply(
 /// the built image, in local dev without a Fondament checkout at fondament_path).
 fn resolve_guilhem_prompt(fondament_path: &str, generation: &str, room_id: &str) -> (String, Vec<String>) {
     let (role_context, skills) = match load_fondament_def(fondament_path, generation) {
-        Ok(def) => (def.context, def.skills),
+        Ok(def) => { let skills = def.skill_ids(); (def.context, skills) }
         Err(e) => {
             tracing::warn!("fondament def not found for '{}' at '{}': {}; using bare prompt", generation, fondament_path, e);
             (String::from("You are Guilhem, the org agent for the Occitan stack."), vec![])
@@ -2695,7 +2695,7 @@ async fn run_turn(state: &ListenState, req: &TurnReq) -> anyhow::Result<String> 
     // back to none if the definition isn't present (e.g. local dev without a
     // Fondament checkout at fondament_path).
     let skills = match load_fondament_def(&state.fondament_path, &state.generation) {
-        Ok(def) => def.skills,
+        Ok(def) => def.skill_ids(),
         Err(e) => {
             tracing::warn!(
                 "fondament def not found for '{}' at '{}': {}; turn runs without skills",
