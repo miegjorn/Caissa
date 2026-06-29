@@ -183,7 +183,16 @@ pub fn load_config() -> anyhow::Result<CaissaConfig> {
     }
     // Env overrides — useful for k8s deployments where the toml is a ConfigMap
     // but per-pod values (farga project, model) come from env.
-    if let Ok(v) = std::env::var("FARGA_URL")          { config.farga_url = v; }
+    if let Ok(v) = std::env::var("FARGA_URL") {
+        // When FARGA_URL is overridden, derive farga_mcp_url from it unless
+        // FARGA_MCP_URL is explicitly set or the config file already specified one.
+        let mcp_derived = format!("{}/mcp", v.trim_end_matches('/'));
+        if config.farga_mcp_url == default_farga_mcp_url() {
+            config.farga_mcp_url = mcp_derived;
+        }
+        config.farga_url = v;
+    }
+    if let Ok(v) = std::env::var("FARGA_MCP_URL")      { config.farga_mcp_url = v; }
     if let Ok(v) = std::env::var("FARGA_PROJECT")      { config.project = v; }
     if let Ok(v) = std::env::var("CHRONICLE_MODEL")    { config.chronicle_model = v; }
     if let Ok(v) = std::env::var("MATRIX_MODEL")       { config.matrix_model = v; }
