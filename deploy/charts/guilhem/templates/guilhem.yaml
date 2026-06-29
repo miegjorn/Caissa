@@ -332,13 +332,11 @@ metadata:
     occitan/generation: guilhem
 spec:
   replicas: {{ .Values.replicas }}
-  # maxUnavailable: 0 — keep the old pod alive until the new one passes readiness.
-  # Prevents in-flight agent-sidecar sessions from being killed mid-turn during deploys.
+  # Recreate: terminate the old pod before starting the new one.
+  # Ensures only one Guilhem instance runs at a time. Multi-instance coordination
+  # (queue-based lock) is deferred — single instance is the correct default until then.
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: guilhem
