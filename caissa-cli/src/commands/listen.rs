@@ -243,6 +243,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         .route("/trigger/dream", post(handle_dream))
         .route("/trigger/dispatch", post(handle_dispatch))
         .route("/trigger/mission-pulse", post(handle_mission_pulse))
+        .route("/trigger/intake", post(handle_intake))
         .route("/trigger/scan", post(handle_scan))
         .route("/matrix/reply", post(handle_matrix_reply))
         .route("/turn", post(handle_turn))
@@ -1468,6 +1469,220 @@ Your written response IS the mission summary — it is recorded to Farga automat
     )
 }
 
+// ── Project intake ────────────────────────────────────────────────────────────
+//
+// POST /trigger/intake — onboard a new project onto the Occitan platform.
+//
+// Guilhem receives a high-level project description and orchestrates the
+// creation of all platform infrastructure: GitHub repos, Fondament personas,
+// Farga context nodes, Nervi subjects, initial Initiatives/Epics, and a
+// handoff document that guides the k8s side (pod deploy, Charradissa routing).
+//
+// Request body: { "reason": "<project description>" }
+// The "reason" field carries the project description that Guilhem bootstraps from.
+
+async fn handle_intake(
+    State(state): State<Arc<ListenState>>,
+    Json(req): Json<TriggerReq>,
+) -> StatusCode {
+    tracing::info!("intake trigger received: {}", req.reason);
+
+    tokio::spawn(async move {
+        match run_intake(&state, &req.reason).await {
+            Ok(_) => tracing::info!("intake complete"),
+            Err(e) => tracing::error!("intake failed: {}", e),
+        }
+    });
+
+    StatusCode::ACCEPTED
+}
+
+async fn run_intake(state: &ListenState, description: &str) -> anyhow::Result<()> {
+    let mcp_config = serde_json::to_string(&serde_json::json!({
+        "mcpServers": guilhem_mcp_servers(state)
+    }))?;
+    let mcp_path = std::env::temp_dir().join("guilhem-intake-mcp.json");
+    std::fs::write(&mcp_path, &mcp_config)?;
+
+    let prompt = build_intake_prompt(description);
+    let tools = guilhem_allowed_tools().join(",");
+
+    let output = tokio::process::Command::new("claude")
+        .args([
+            "--print",
+            &prompt,
+            "--model",
+            &state.dream_model,
+            "--mcp-config",
+            mcp_path.to_str().unwrap(),
+            "--allowed-tools",
+            &tools,
+        ])
+        .env("FARGA_URL", &state.farga_url)
+        .env("FARGA_PROJECT", &state.farga_project)
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("intake claude exited: {}", stderr);
+    }
+
+    let response = String::from_utf8_lossy(&output.stdout).to_string();
+    if !response.trim().is_empty() {
+        post_signal(state, &response).await?;
+    }
+    tracing::info!("intake complete");
+    Ok(())
+}
+
+fn build_intake_prompt(description: &str) -> String {
+    format!(r###"You are Guilhem de Tudela, org agent for the Occitan stack. A new project is
+being onboarded onto the platform. Your job is to create all the real-estate the project
+needs to run as a first-class citizen on the Occitan platform.
+
+{constraint}
+
+## Project description
+
+{description}
+
+---
+
+## STEP 1 — Derive project identity
+
+From the description, extract:
+- **project_id**: short kebab-case identifier (e.g. "bossa-nova")
+- **display_name**: human-readable name
+- **primary_language**: Rust / Python / TypeScript / etc.
+- **components**: list of component names (each becomes a Farga project + agent pod)
+- **repos**: list of GitHub repos (format: miegjorn/<RepoName>)
+- **description**: one paragraph summary for Farga
+
+---
+
+## STEP 2 — Create GitHub structure
+
+For each repo that does not already exist:
+```
+gh repo create miegjorn/<RepoName> --private --description "<description>"
+```
+
+For each repo, create a minimal CLAUDE.md at root:
+```
+gh api repos/miegjorn/<RepoName>/contents/CLAUDE.md \
+  --method PUT \
+  --field message="chore: initial CLAUDE.md for Occitan agent context" \
+  --field content="$(echo '# <RepoName>
+
+## Project
+<display_name> — part of the Occitan platform.
+
+## Component
+<component_name>
+
+## Primary language
+<language>
+
+## Role
+<one sentence on what this component does>
+
+## Key directories
+(populate after initial code is added)
+' | base64)"
+```
+
+Also create an initial GitHub Initiative in the primary repo:
+```
+gh issue create --repo miegjorn/<primary-repo> \
+  --title "Platform bootstrap: <display_name>" \
+  --body "## Goal\n<one paragraph from description>\n\n## Components\n<list>\n\n## Horizon\nInitial bootstrap" \
+  --label "initiative"
+```
+
+---
+
+## STEP 3 — Seed Farga context graph
+
+For each component, write context nodes via mcp__farga__write_context_node:
+
+**Codebase reference** (readable by all — component level):
+- path: "[<component>][codebase]"
+- node_type: "codebase-ref"
+- read_role: "component"
+- content: "GitHub: https://github.com/miegjorn/<RepoName>\nCLAUDE.md: (will be populated after first commit)\nPrimary language: <language>"
+- project: "<project_id>"
+- component: "<component>"
+
+**Architecture** (readable by architect and above):
+- path: "[<component>][architecture]"
+- node_type: "architecture"
+- read_role: "architect"
+- content: "Component: <name>\nRole: <role>\nDependencies: (to be filled after initial design)\nInterfaces: (to be filled)"
+- project: "<project_id>"
+- component: "<component>"
+
+**Project rationale** (readable by org level — Guilhem and above):
+- path: "[<project_id>][rationale]"
+- node_type: "rationale"
+- read_role: "org"
+- content: "<full description of why this project exists, what it is building toward, key constraints>"
+- project: "<project_id>"
+
+---
+
+## STEP 4 — Create Nervi subjects (document only)
+
+Write to Farga (source="intake") the Nervi subjects this project needs:
+For each component: `occitan.issues.<component>`, `occitan.dispatch.<component>`
+These will be live when the component agent pods are deployed.
+
+---
+
+## STEP 5 — Create initial Epics via architect consultation
+
+For the bootstrap Initiative (from Step 2), invoke the architect for each primary component:
+mcp__dispatcher__invoke_agent:
+- domain: "occitan" (use Guilhem's own architect facet for new projects)
+- facet: "architect"
+- task: "Propose 2-3 bootstrap Epics for a new component called '<component>' in project '<display_name>'.
+  Role: <component role>.
+  The Epics should cover: (1) initial repo setup and CI, (2) core implementation skeleton,
+  (3) integration with the Occitan platform (Farga, Nervi, Fondament).
+  Return Epic titles and 2-sentence descriptions."
+
+Wait for results, then create the Epics in GitHub:
+```
+gh issue create --repo miegjorn/<RepoName> \
+  --title "<epic title>" \
+  --body "<epic description>\n\nParent Initiative: miegjorn/<primary-repo>#1" \
+  --label "epic"
+```
+
+---
+
+## STEP 6 — Write handoff document to Farga
+
+Write a `write_artifact` signal with:
+- project: "<project_id>"
+- title: "Platform intake: <display_name>"
+- kind: "design"
+- content: Structured handoff document covering:
+  - Project identity (id, name, repos, components)
+  - GitHub repos created (with URLs)
+  - Farga context nodes seeded (paths and read_roles)
+  - Nervi subjects to configure
+  - Initiatives and Epics created (with issue numbers)
+  - **Manual steps remaining** (deploy pods, configure Charradissa routing, add to component-agents values.yaml, seed Fondament personas)
+  - Next actions for Pierre-Luc
+
+Your written response IS the intake summary — recorded to Farga automatically.
+"###,
+        constraint = guilhem_dispatch_constraint(),
+        description = description,
+    )
+}
+
 // ── Matrix reply ──────────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -1675,6 +1890,9 @@ fn guilhem_allowed_tools() -> Vec<String> {
         "mcp__charradissa__matrix_request_approval".to_string(),
         "mcp__nervi__nervi_publish".to_string(),
         "mcp__nervi__nervi_subscribe".to_string(),
+        "mcp__farga__write_context_node".to_string(),
+        "mcp__farga__read_context_node".to_string(),
+        "mcp__farga__list_context_nodes".to_string(),
     ]
 }
 
@@ -1806,6 +2024,8 @@ fn component_allowed_tools() -> Vec<&'static str> {
         "mcp__farga__read_context",
         "mcp__farga__write_signal",
         "mcp__farga__update_component_todo",
+        "mcp__farga__read_context_node",
+        "mcp__farga__list_context_nodes",
         "mcp__dispatcher__invoke_agent",
         "mcp__dispatcher__get_agent_result",
         "mcp__dispatcher__list_agent_specs",

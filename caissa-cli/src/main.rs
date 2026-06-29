@@ -88,6 +88,14 @@ enum Commands {
     /// Writes a bug-signal to Farga on any anomaly.
     /// Runs as a sidecar in the Guilhem pod (independent of the main process).
     Watch,
+    /// Seed Farga's role-scoped context graph from GitHub repos.
+    /// Fetches CLAUDE.md and README, synthesizes architecture via Claude,
+    /// and writes typed context nodes: [component][codebase] and [component][architecture].
+    Ingest {
+        /// Specific component to ingest (e.g. "gardian"). Omit to ingest all.
+        #[arg(long)]
+        component: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -116,5 +124,8 @@ async fn main() -> anyhow::Result<()> {
             commands::report::run(&url, &proj).await
         }
         Commands::Watch => commands::watch::run().await,
+        Commands::Ingest { component } => {
+            commands::ingest::run(component.as_deref()).await
+        }
     }
 }

@@ -1,6 +1,7 @@
 pub mod build;
 pub mod dispatch;
 pub mod handoff;
+pub mod ingest;
 pub mod listen;
 pub mod push;
 pub mod report;

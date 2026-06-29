@@ -302,4 +302,92 @@ spec:
                   memory: 16Mi
                 limits:
                   memory: 32Mi
+---
+# Weekly context ingestion — seeds Farga's role-scoped context graph for {{ .name }}.
+# Fires Sunday 03:00 UTC — after scan (02:00) and before the weekly dream (03:30).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .name }}-ingest
+  namespace: agents
+  labels:
+    app.kubernetes.io/name: {{ .name }}-ingest
+    app.kubernetes.io/part-of: occitan
+    occitan/component: {{ .name }}
+spec:
+  schedule: "0 3 * * 0"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 1800
+      template:
+        spec:
+          restartPolicy: Never
+          {{- with $.Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          initContainers:
+            - name: fetch-tokens
+              image: openbao/openbao:latest
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  export BAO_ADDR=http://openbao.occitan-system.svc.cluster.local:8200
+                  GH=$(bao kv get -field=value secret/occitan/github)
+                  umask 077
+                  echo "export GH_TOKEN='$GH'" > /creds/tokens.env
+                  echo "export GITHUB_TOKEN='$GH'" >> /creds/tokens.env
+              env:
+                - name: BAO_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: openbao
+                      key: token
+              volumeMounts:
+                - name: creds
+                  mountPath: /creds
+          containers:
+            - name: ingest
+              image: {{ $.Values.image }}
+              imagePullPolicy: Always
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  [ -f /creds/tokens.env ] && . /creds/tokens.env
+                  exec caissa ingest --component {{ .name }}
+              env:
+                - name: FARGA_URL
+                  value: {{ $.Values.farga.url | quote }}
+                - name: FARGA_PROJECT
+                  value: {{ .name | quote }}
+                - name: ANTHROPIC_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: anthropic
+                      key: api-key
+              volumeMounts:
+                - name: caissa-config
+                  mountPath: /workspace/caissa.toml
+                  subPath: caissa.toml
+                  readOnly: true
+                - name: creds
+                  mountPath: /creds
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  memory: 512Mi
+          volumes:
+            - name: caissa-config
+              configMap:
+                name: {{ .name }}-agent-caissa
+            - name: creds
+              emptyDir:
+                medium: Memory
 {{- end }}
