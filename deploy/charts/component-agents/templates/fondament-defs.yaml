@@ -64,6 +64,10 @@ data:
           kind: mcp
           server: charradissa
           tool: matrix_get_dm
+        - id: matrix-read
+          kind: mcp
+          server: charradissa
+          tool: matrix_read
       jit: []
 
   gardian-agent.yaml: |
@@ -120,6 +124,10 @@ data:
           kind: mcp
           server: charradissa
           tool: matrix_get_dm
+        - id: matrix-read
+          kind: mcp
+          server: charradissa
+          tool: matrix_read
       jit: []
 
   farga-agent.yaml: |
@@ -175,6 +183,10 @@ data:
           kind: mcp
           server: charradissa
           tool: matrix_get_dm
+        - id: matrix-read
+          kind: mcp
+          server: charradissa
+          tool: matrix_read
       jit: []
 
   fondament-agent.yaml: |
@@ -238,6 +250,10 @@ data:
           kind: mcp
           server: charradissa
           tool: matrix_get_dm
+        - id: matrix-read
+          kind: mcp
+          server: charradissa
+          tool: matrix_read
       jit: []
 
   cor-agent.yaml: |
@@ -296,6 +312,10 @@ data:
           kind: mcp
           server: charradissa
           tool: matrix_get_dm
+        - id: matrix-read
+          kind: mcp
+          server: charradissa
+          tool: matrix_read
       jit: []
 
   caissa-agent.yaml: |
@@ -349,6 +369,10 @@ data:
           kind: mcp
           server: charradissa
           tool: matrix_get_dm
+        - id: matrix-read
+          kind: mcp
+          server: charradissa
+          tool: matrix_read
       jit: []
 
   nervi-agent.yaml: |
@@ -423,6 +447,10 @@ data:
           kind: mcp
           server: charradissa
           tool: matrix_get_dm
+        - id: matrix-read
+          kind: mcp
+          server: charradissa
+          tool: matrix_read
       jit: []
 
   charradissa-agent.yaml: |
@@ -478,4 +506,8 @@ data:
           kind: mcp
           server: charradissa
           tool: matrix_get_dm
+        - id: matrix-read
+          kind: mcp
+          server: charradissa
+          tool: matrix_read
       jit: []
