@@ -21,7 +21,7 @@ data:
     generation = "{{ .name }}-agent"
     farga_mcp_url = {{ $.Values.farga.url | quote | replace "\"" "" | printf "%s/mcp" | quote }}
     dispatcher_mcp_url = "http://dispatcher.agents.svc.cluster.local:9090/mcp"
-    nervi_mcp_url = "http://nervi-mcp.occitan-system.svc.cluster.local:8080/mcp"
+    nervi_mcp_url = "http://nervi.occitan-system.svc.cluster.local:8080/mcp"
     chronicle_model = "claude-haiku-4-5-20251001"
 
     [sandbox]
@@ -201,7 +201,7 @@ spec:
                   set -eu
                   COMPONENT="{{ .name }}"
                   REPO="miegjorn/{{ .name | title }}"
-                  NERVI_MCP="http://nervi-mcp.occitan-system.svc.cluster.local:8080/mcp"
+                  NERVI_MCP="http://nervi.occitan-system.svc.cluster.local:8080/mcp"
                   SUBJECT="occitan.issues.${COMPONENT}"
                   echo "Syncing issues from ${REPO} to ${SUBJECT}"
 
