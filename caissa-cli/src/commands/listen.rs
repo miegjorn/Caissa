@@ -40,6 +40,7 @@ use caissa_core::agent::load_fondament_def;
 use super::handoff::{is_handoff_message, parse_handoff_message, HandoffRequest};
 
 #[derive(Clone)]
+#[allow(dead_code)]
 struct ListenState {
     farga_url: String,
     farga_project: String,
@@ -1116,6 +1117,7 @@ Your written response IS the scan report. Be precise and brief.
 // ── Matrix reply ──────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub struct MatrixReplyReq {
     pub room_id: String,
     pub sender: String,
@@ -1130,6 +1132,7 @@ pub struct MatrixReplyReq {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub struct MatrixHistoryEntry {
     pub sender: String,
     pub content: String,
