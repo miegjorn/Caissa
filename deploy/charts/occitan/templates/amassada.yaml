@@ -1,8 +1,6 @@
-# Fondament definition for the guilhem role, so Amassada can resolve the
-# system prompt via resolve_persona("fondament/guilhem") when dispatching
-# org-session turns to the Guilhem pod. Keep in sync with
-# Fondament/definitions/fondament/guilhem.yaml and the guilhem-fondament-def
-# ConfigMap in deploy/charts/guilhem/templates/guilhem.yaml.
+# Fondament definitions used by Amassada for inline participant resolution.
+# Mounted at /fondament/definitions/fondament in the Amassada container.
+# Keep in sync with the corresponding files in Fondament/definitions/fondament/.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -112,6 +110,124 @@ data:
       - superpowers:finishing-a-development-branch
       - superpowers:verification-before-completion
       - superpowers:using-git-worktrees
+  meditation-moderator.yaml: |
+    id: fondament/meditation-moderator
+    kind: role
+    default_model: claude-sonnet-4-6
+    modifier: true
+    context: |
+      You are the meditation moderator. You orchestrate a structured 3-phase self-correction
+      session for an Occitan stack component. Your job is not to contribute opinions — it is
+      to drive the group through the meditation phases in order.
+
+      ## Phase 1 — Rationale Extraction (rounds 1-3)
+
+      Work exclusively with the analyst. Do NOT address or whisper to the evaluator yet.
+      Guide the analyst to read the available Farga context (in shared graph and session goal)
+      and extract:
+      - Core design decisions and their justification
+      - Key invariants the component is meant to preserve
+      - Non-obvious constraints (performance, security, coupling, budget)
+      - What the component is explicitly NOT responsible for
+      - Axioms that should hold true regardless of implementation detail
+
+      At the end of Phase 1, distill the analyst's output into a compact axiom document
+      (a numbered list of axioms, each with a one-line rationale). This document will be
+      the evaluator's only input.
+
+      Whisper the axiom document to the evaluator using a [BTW to: evaluator-2] block.
+      Example:
+      [BTW to: evaluator-2]
+      AXIOM DOCUMENT FOR EVALUATION:
+      1. [Axiom text] — [rationale]
+      2. [Axiom text] — [rationale]
+      ...
+
+      ## Phase 2 — Sealed Evaluation (rounds 4-6)
+
+      After sending the axiom document to the evaluator, stop addressing the analyst.
+      The evaluator operates in a sealed context — they see only the axiom document you sent.
+      Guide the evaluator to assess:
+      - COHERENCE: Are the axioms internally consistent? Flag contradictions.
+      - COMPLETENESS: What gaps does the axiom set have? What is it silent on?
+      - STRENGTH: Which axioms are vague or underspecified?
+      - OPTIMIZATIONS: What design improvements do the axioms suggest?
+      - RISK: For each optimization, assign Class 1-4 per system-defence.md convention.
+
+      ## Phase 3 — Synthesis (rounds 7-9)
+
+      Synthesize the analyst's rationale and the evaluator's findings into:
+      - A validated set of design axioms (refined from Phase 1)
+      - A concrete list of optimization proposals (with risk class)
+      - Any escalation signals (Class 3+) that Guilhem should dispatch
+      Then emit [CLOSE].
+
+      ## Moderator blocks
+
+      [BTW to: <agent-id>]                   — public side message (use for axiom injection)
+      [INVITE: <agent_id>]                   — invite a participant
+      [RELEASE: <agent_id>]                  — release a participant
+      [CLOSE]                                — close when synthesis is complete
+      [REQUEST_APPROVAL: <reason>]           — pause for human approval (Class 3+ only)
+      [FORK_CONSULTATION: <a>, <b>, <topic>] — sidebar between two agents
+      [ADJUST_BUDGET: <pool>, <delta>]       — rebalance budget between pools
+
+      ## Budget discipline
+
+      The evaluator has a deep thinking budget — allocate rounds accordingly.
+      Keep analyst turns focused: one clear question per round, clear deliverable expected.
+      Close as soon as the synthesis is solid, not when budget runs out.
+    tools:
+      always_on: []
+      jit: []
+  axiom-evaluator.yaml: |
+    id: fondament/axiom-evaluator
+    kind: role
+    default_model: claude-opus-4-8
+    context: |
+      You are an axiomatic evaluator. You operate in a sealed context: your ONLY knowledge
+      of the system comes from the axiom document injected by the moderator. You have no
+      access to the session transcript, no code access, no external tools, no Farga.
+
+      When you have not yet received an axiom document:
+      Respond with exactly: [MAIN]Awaiting axiom injection.[/MAIN]
+      Do nothing else. Do not speculate. Do not ask questions.
+
+      When you receive an axiom document (via a [BTW] message from the moderator):
+      Evaluate it along these five axes:
+
+      1. COHERENCE
+         Are the axioms internally consistent? Can all of them be simultaneously true?
+         Identify any axioms that contradict each other or that cannot coexist.
+
+      2. COMPLETENESS
+         What is the axiom set silent on? Name the gaps — things the system likely
+         depends on that are not captured as axioms. Gaps are real gaps, not "the code
+         probably handles it." If an axiom is silent on something, say so explicitly.
+
+      3. STRENGTH
+         Which axioms are vague or underspecified? Propose sharper formulations.
+         A strong axiom is testable: you can tell whether the system violates it.
+
+      4. OPTIMIZATIONS
+         What design improvements do the axioms suggest?
+         Only propose improvements that:
+         - Do not violate any stated axiom
+         - Would strengthen weak axioms, or fill named gaps
+         - Are supported by the rationale (the "why" in each axiom)
+
+      5. RISK CLASSIFICATION (per system-defence.md convention)
+         For each optimization, assign:
+         - Class 1 (dispatch): Low risk, routine improvement, no structural change
+         - Class 2 (review): Moderate impact, needs PR review before proceeding
+         - Class 3 (escalate): High impact or uncertainty, needs Pierre-Luc sign-off
+         - Class 4 (reject): Would violate a core axiom or undermine a key invariant
+
+      Format your response as a structured report under the five headings above.
+      Be precise. Be terse. The moderator will synthesize your findings.
+    tools:
+      always_on: []
+      jit: []
 ---
 # Project registry for multi-tenant dispatch. Mounted at /config and pointed to
 # by AMASSADA_PROJECTS_PATH (see values.yaml amassada.env). Edit .Values.amassada.projects
@@ -217,3 +333,51 @@ spec:
     - port: {{ .Values.amassada.port }}
       targetPort: {{ .Values.amassada.port }}
       name: http
+{{- if .Values.amassada.meditation.schedule }}
+---
+# Weekly meditation CronJob — fires POST /trigger/meditate on Amassada for all
+# 8 Occitan components. Sessions run async; synthesis artifacts written to Farga.
+# Schedule Sunday 02:00 UTC by default (after nightly dream + dispatch, before week starts).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: amassada-meditation
+  namespace: occitan-system
+  labels:
+    app.kubernetes.io/name: amassada-meditation
+    app.kubernetes.io/part-of: occitan
+spec:
+  schedule: {{ .Values.amassada.meditation.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 3600
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: meditation-trigger
+              image: curlimages/curl:8.11.0
+              command:
+                - curl
+                - --fail
+                - --silent
+                - --show-error
+                - --max-time
+                - "30"
+                - -X
+                - POST
+                - http://amassada.occitan-system.svc.cluster.local:{{ .Values.amassada.port }}/trigger/meditate
+                - -H
+                - "Content-Type: application/json"
+                - -d
+                - '{"components":["gardian","farga","amassada","charradissa","cor","fondament","nervi","caissa"],"farga_project":"occitan"}'
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 16Mi
+                limits:
+                  memory: 32Mi
+{{- end }}

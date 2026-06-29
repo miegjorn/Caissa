@@ -60,6 +60,11 @@ amassada:
     # matrix_rooms = ["!exampleRoomId:occitane.guilhem"]
     # farga_project = "example-agent"
     # mcp_scopes = ["farga:read", "farga:write:example-agent"]
+  meditation:
+    # Weekly meditation schedule — POST /trigger/meditate on all 8 components.
+    # Fires Sunday 02:00 UTC (after nightly dream+dispatch, before the week starts).
+    # Set to "" to disable.
+    schedule: "0 2 * * 0"
 # ─── Charradissa ─────────────────────────────────────────────────────────────
 charradissa:
   image: ghcr.io/miegjorn/charradissa
