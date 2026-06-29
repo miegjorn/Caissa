@@ -6,7 +6,7 @@ metadata:
 spec:
   project: occitan
   source:
-    repoURL: ssh://git@ssh.github.com:443/miegjorn/nervi.git
+    repoURL: https://github.com/miegjorn/nervi
     targetRevision: main
     path: deploy
     helm:
