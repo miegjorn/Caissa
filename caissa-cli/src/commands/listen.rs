@@ -240,6 +240,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         .route("/trigger/sre-alert", post(handle_sre_alert))
         .route("/trigger/backlog-review", post(handle_backlog_review))
         .route("/trigger/dream", post(handle_dream))
+        .route("/trigger/dispatch", post(handle_dispatch))
         .route("/trigger/scan", post(handle_scan))
         .route("/matrix/reply", post(handle_matrix_reply))
         .route("/turn", post(handle_turn))
@@ -298,63 +299,85 @@ async fn handle_sre_alert(
 }
 
 async fn run_sre_alert(state: &ListenState) -> anyhow::Result<()> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()?;
+    let mcp_config = serde_json::to_string(&serde_json::json!({
+        "mcpServers": guilhem_mcp_servers(state)
+    }))?;
+    let mcp_path = std::env::temp_dir().join("guilhem-sre-alert-mcp.json");
+    std::fs::write(&mcp_path, &mcp_config)?;
 
-    // Fetch recent signals — filter for watchdog bug-signals
-    let url = format!("{}/signals/recent?project={}", state.farga_url, state.farga_project);
-    let signals: Vec<serde_json::Value> = client.get(&url).send().await?.json().await.unwrap_or_default();
+    let prompt = build_sre_alert_prompt();
 
-    let watchdog_signals: Vec<&str> = signals
-        .iter()
-        .filter(|s| s["source"].as_str() == Some("sre-watchdog"))
-        .filter_map(|s| s["content"].as_str())
-        .collect();
+    let output = tokio::process::Command::new("claude")
+        .args([
+            "--print",
+            &prompt,
+            "--model",
+            &state.dream_model,
+            "--mcp-config",
+            mcp_path.to_str().unwrap(),
+            "--allowed-tools",
+            "Bash,mcp__farga__search_signals,mcp__farga__write_signal,mcp__charradissa__matrix_send,mcp__nervi__nervi_subscribe",
+        ])
+        .env("FARGA_URL", &state.farga_url)
+        .env("FARGA_PROJECT", &state.farga_project)
+        .output()
+        .await?;
 
-    if watchdog_signals.is_empty() {
-        tracing::info!("sre-alert: all clear — no watchdog signals");
-        return Ok(());
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("sre-alert claude exited with error: {}", stderr);
     }
 
-    let alert_body = format!(
-        "⚠️ SRE watchdog alert ({} issue(s) detected):\n\n{}",
-        watchdog_signals.len(),
-        watchdog_signals.join("\n\n---\n\n")
-    );
-
-    tracing::warn!("sre-alert: {} watchdog signal(s) found — posting to Matrix", watchdog_signals.len());
-
-    if state.sre_matrix_room_id.is_empty() {
-        tracing::warn!("sre-alert: SRE_MATRIX_ROOM_ID not set — alert not posted to Matrix");
-        return Ok(());
-    }
-
-    let synapse_url = std::env::var("SYNAPSE_URL")
-        .unwrap_or_else(|_| "http://synapse.occitan-system.svc.cluster.local:8008".into());
-    let admin_token = std::env::var("SYNAPSE_ADMIN_TOKEN").unwrap_or_default();
-
-    if admin_token.is_empty() {
-        tracing::error!("sre-alert: SYNAPSE_ADMIN_TOKEN not set — cannot post Matrix alert");
-        return Ok(());
-    }
-
-    let txn = uuid::Uuid::new_v4();
-    let matrix_url = format!(
-        "{}/_matrix/client/v3/rooms/{}/send/m.room.message/{}",
-        synapse_url, state.sre_matrix_room_id, txn
-    );
-
-    client
-        .put(&matrix_url)
-        .bearer_auth(&admin_token)
-        .json(&serde_json::json!({ "msgtype": "m.text", "body": alert_body }))
-        .send()
-        .await?
-        .error_for_status()?;
-
-    tracing::info!("sre-alert posted to Matrix room {}", state.sre_matrix_room_id);
+    tracing::info!("sre-alert dispatch complete");
     Ok(())
+}
+
+fn build_sre_alert_prompt() -> String {
+    r###"You are Guilhem de Tudela, org agent. The SRE watchdog has detected health anomalies.
+
+Your job: read the alerts, identify which component owns each failure, dispatch a targeted
+repair task to that component's Matrix room via NATS-backed alert reading.
+
+---
+
+## STEP 1 — Read alerts
+
+Call nervi_subscribe with subject="occitan.sre.alerts" to pull recent alerts from the
+NATS subject. Use max_messages=20 and a short timeout.
+
+Also call mcp__farga__search_signals to find signals with source="sre-watchdog" from the
+last hour (as a fallback if NATS has no messages yet).
+
+## STEP 2 — Evaluate
+
+If no alerts are found in either source:
+- Stop. Write a brief Farga signal: source="guilhem-sre-dispatch", content="SRE alert scan: all clear — no anomalies found."
+- Do not dispatch.
+
+If alerts ARE found, for each anomaly identify the responsible component:
+- "gardian" → Gardian (room: !hNBIrYgqZxPsnBntbY:occitane.guilhem)
+- "farga" → Farga (room: !kIDEzlMzVRRXveGVpL:occitane.guilhem)
+- "amassada" → Amassada (room: !AftizZpcNgfIUgqFQt:occitane.guilhem)
+- "charradissa" → Charradissa (room: !tGdWTCTRPPXgnWrhad:occitane.guilhem)
+- "dispatcher" → Caissa (room: !fquiGtdiWSOUyYhYUV:occitane.guilhem)
+- "nervi" → Nervi (room: !HUzSiveWLbgEsjzIFt:occitane.guilhem)
+- "guilhem" → Escalate via Farga (cannot dispatch to yourself; write to Farga source="guilhem-sre-escalate")
+
+## STEP 3 — Dispatch
+
+For each affected component, send a targeted repair task via matrix_send:
+- room_id: the component's room ID from the map above
+- message: "[SRE DISPATCH] Watchdog anomaly detected: <specific error description>.
+  Please investigate: check /health endpoint, review recent pod logs for errors,
+  identify root cause. If a code fix is needed, open a PR following the standard
+  issue→implement→PR→approval flow. Confirm when resolved or if you need help."
+
+## STEP 4 — Record
+
+Write a summary signal to Farga:
+- source: "guilhem-sre-dispatch"
+- content: "Dispatched SRE alerts to: <list>. Anomalies: <brief summary>. Timestamp: <now>"
+"###.to_string()
 }
 
 fn build_chronicle_prompt(reason: &str, project: &str) -> String {
@@ -625,7 +648,7 @@ async fn run_dream(state: &ListenState) -> anyhow::Result<()> {
             "--mcp-config",
             mcp_path.to_str().unwrap(),
             "--allowed-tools",
-            "Bash,mcp__farga__search_signals,mcp__farga__read_context,mcp__farga__write_signal,mcp__farga__update_component_todo",
+            "Bash,WebSearch,WebFetch,mcp__farga__search_signals,mcp__farga__read_context,mcp__farga__write_signal,mcp__farga__update_component_todo",
         ])
         .env("FARGA_URL", &state.farga_url)
         .env("FARGA_PROJECT", &state.farga_project)
@@ -771,6 +794,46 @@ For each opportunity you identify, decide:
   - Improvement opportunities identified (with reasoning)
   - GitHub issues created (with URLs)
   - Stack trajectory note: what does today's dream imply about where the stack is heading?
+
+---
+
+## PHASE 4: ADVERSARIAL CHALLENGE
+
+The dream is not only consolidation — it is also where the stack challenges itself.
+Prior art exists. Other systems have solved similar problems. Not consulting it is a
+form of local-optimum convergence. This phase is mandatory.
+
+1. Read the system-defence axioms before evaluating anything:
+   `cat /fondament/definitions/fondament/system-defence.md`
+
+2. For each architecturally non-obvious finding from Phase 2 (patterns, recurring signals,
+   structural gaps — not simple bug fixes), search the web for prior art:
+   - Query pattern: "how do [Rust async / event-sourced / multi-agent] systems handle [the pattern]?"
+   - Search: mature implementations of agent orchestration, distributed chronicle/memory,
+     CQRS event sourcing, Rust actor patterns, MCP multi-server composition.
+   - You are looking for: materially better approaches, known failure modes of the current
+     approach, standard patterns the stack might be missing or misapplying.
+
+3. For each finding where web search reveals a materially better approach:
+   a. Evaluate it against the system-defence axioms (A-1 through A-8).
+   b. Classify it using the risk table (Class 1–4).
+   c. Write a "challenge proposal" signal to Farga using mcp__farga__write_signal:
+      - source: "dream-adversarial"
+      - content (structured):
+        * Current approach: [one sentence]
+        * Prior art suggests: [1-2 sentences, include search reference]
+        * Axiom check: [which axioms are relevant, any conflicts?]
+        * Risk class: [1/2/3/4]
+        * Recommended action: [dispatch / review / escalate to Pierre-Luc / reject]
+   d. Do NOT act on Class 3 or Class 4 proposals autonomously — the signal is the action.
+
+4. If no materially better approaches were found for any finding:
+   Write a brief Farga signal (source: "dream-adversarial") confirming the stack's current
+   patterns align with prior art. This is meaningful evidence of intentional design.
+
+Note: A challenge that gets rejected (Class 4) is worth recording — it is evidence of
+deliberate design choice over convenience. The adversarial phase is not skepticism for its
+own sake; it is how the stack avoids mistaking inertia for wisdom.
 
 **Your written response** is the dream report — concise, substantive, forward-looking.
 Do not just narrate what you did. Chronicle what the stack is becoming.
@@ -1013,6 +1076,148 @@ pub struct MatrixHistoryEntry {
     pub content: String,
 }
 
+// ── Active dispatch — post-dream routing ─────────────────────────────────────
+//
+// POST /trigger/dispatch — CronJob fires 1h after the dream (04:00 UTC daily).
+//
+// Guilhem reads the dream report and challenge signals from Farga, classifies
+// each item using the system-defence risk table, and dispatches actionable
+// Class 1/2 items to the responsible component agents via Matrix. Class 3 items
+// are surfaced to Pierre-Luc. Class 4 items are rejected with a Farga signal.
+
+async fn handle_dispatch(
+    State(state): State<Arc<ListenState>>,
+    Json(req): Json<TriggerReq>,
+) -> StatusCode {
+    tracing::info!("dispatch trigger received: {}", req.reason);
+
+    tokio::spawn(async move {
+        match run_dispatch(&state).await {
+            Ok(_) => tracing::info!("dispatch complete"),
+            Err(e) => tracing::error!("dispatch failed: {}", e),
+        }
+    });
+
+    StatusCode::ACCEPTED
+}
+
+async fn run_dispatch(state: &ListenState) -> anyhow::Result<()> {
+    let mcp_config = serde_json::to_string(&serde_json::json!({
+        "mcpServers": guilhem_mcp_servers(state)
+    }))?;
+    let mcp_path = std::env::temp_dir().join("guilhem-dispatch-mcp.json");
+    std::fs::write(&mcp_path, &mcp_config)?;
+
+    let prompt = build_dispatch_prompt();
+
+    let output = tokio::process::Command::new("claude")
+        .args([
+            "--print",
+            &prompt,
+            "--model",
+            &state.dream_model,
+            "--mcp-config",
+            mcp_path.to_str().unwrap(),
+            "--allowed-tools",
+            "Bash,WebSearch,mcp__farga__search_signals,mcp__farga__write_signal,mcp__charradissa__matrix_send,mcp__charradissa__matrix_request_approval,mcp__nervi__nervi_publish",
+        ])
+        .env("FARGA_URL", &state.farga_url)
+        .env("FARGA_PROJECT", &state.farga_project)
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("dispatch claude exited with error: {}", stderr);
+    }
+
+    tracing::info!("dispatch run complete");
+    Ok(())
+}
+
+fn build_dispatch_prompt() -> String {
+    format!(
+        r###"You are Guilhem de Tudela, org agent and active dispatcher for the Occitan stack.
+
+The nightly dream has completed. Your job now is to translate the dream's synthesis and
+adversarial challenge proposals into specific, actionable work — and route it to the right
+component agents. This is where synthesis becomes motion.
+
+---
+
+## STEP 1 — Load system-defence axioms
+
+`cat /fondament/definitions/fondament/system-defence.md`
+
+Read the axioms and risk classification table before evaluating anything.
+
+## STEP 2 — Read the dream output
+
+Use mcp__farga__search_signals to fetch:
+1. The most recent signal with source="dream" (the dream report from the last 24h)
+2. All signals with source="dream-adversarial" from the last 24h (challenge proposals)
+3. Any signals with source="guilhem-sre-escalate" from the last 24h (SRE escalations needing Pierre-Luc)
+
+If no dream signal is found from the last 24h, stop and write a Farga signal explaining:
+source="guilhem-dispatch", content="Dispatch skipped — no recent dream signal found."
+
+## STEP 3 — Classify and route each item
+
+For each actionable item in the dream report and each challenge proposal:
+
+**Class 1 — Dispatch autonomously:**
+- Scoped to one component, reversible, no interface change
+- Send a targeted Matrix dispatch message to the responsible component's room:
+  matrix_send(room_id="<room>", message="[GUILHEM DISPATCH — {today}] Task: <specific, scoped task description>. Context: <why this matters, from the dream>. Expected outcome: <a PR with what specific change>. Risk class: 1 — implement autonomously, follow standard issue→implement→PR flow.")
+
+**Class 2 — Dispatch with review flag:**
+- Cross-component reads, new internal APIs, ambiguous scope
+- Dispatch as above but add: "Risk class: 2 — open as draft PR; wait for Guilhem review before merging."
+
+**Class 3 — Surface to Pierre-Luc:**
+- Public interface changes, new cross-component protocols, Fondament definition changes
+- Write to Farga: source="guilhem-deferred", content="Class 3 item for Pierre-Luc: <description> | Axioms at stake: <which ones> | Waiting for direction."
+- Do NOT dispatch to a component agent.
+
+**Class 4 — Reject:**
+- Violates a system-defence axiom, ELOPe-shaped, removes approval gates
+- Write to Farga: source="guilhem-rejected", content="Class 4 rejection: <proposal summary> | Axiom protected: <which one> | Why this is a hard no: <brief rationale>."
+
+## STEP 4 — Handle SRE escalations
+
+For any source="guilhem-sre-escalate" signals:
+- Use matrix_request_approval to surface to the occitan-code-approval room
+- Describe the failure and why it needs Pierre-Luc (e.g. guilhem itself is degraded)
+
+## STEP 5 — Write dispatch summary
+
+Write a Farga signal summarising all dispatch decisions:
+- source: "guilhem-dispatch"
+- content: Structured list of dispatched / deferred / rejected items with rationale.
+  Include: how many were dispatched, how many deferred for Pierre-Luc, how many rejected.
+
+## Component room IDs
+
+| Component | Matrix room |
+|-----------|-------------|
+| gardian | !hNBIrYgqZxPsnBntbY:occitane.guilhem |
+| fondament | !yYNPBBfRcPAMfpyAeB:occitane.guilhem |
+| farga | !kIDEzlMzVRRXveGVpL:occitane.guilhem |
+| amassada | !AftizZpcNgfIUgqFQt:occitane.guilhem |
+| cor | !SRtFNNEbgkATYOLktl:occitane.guilhem |
+| caissa | !fquiGtdiWSOUyYhYUV:occitane.guilhem |
+| charradissa | !tGdWTCTRPPXgnWrhad:occitane.guilhem |
+| nervi | !HUzSiveWLbgEsjzIFt:occitane.guilhem |
+
+Remember: dispatching is not implementation. You formulate the task precisely and route it
+to the right agent. The agent implements; you review and approve.
+"###,
+        today = chrono::Utc::now().format("%Y-%m-%d"),
+    )
+}
+
+// ── Matrix reply ──────────────────────────────────────────────────────────────
+
 #[derive(Serialize)]
 pub struct MatrixReplyResp {
     pub text: String,
@@ -1194,8 +1399,13 @@ fn guilhem_mcp_servers(state: &ListenState) -> serde_json::Value {
 /// The tool allow-list granted to every Guilhem sidecar session. Kept as a
 /// single source of truth so the Matrix and `/turn` paths can't drift apart.
 fn guilhem_allowed_tools() -> Vec<String> {
+    // Guilhem's role: read, formulate, dispatch, review — not implement in component repos.
+    // Edit/Write are intentionally absent — code changes flow through component agents via dispatch.
+    // WebSearch/WebFetch enable adversarial challenge evaluation and PR research.
     vec![
-        "Bash".to_string(), "Edit".to_string(), "Write".to_string(),
+        "Bash".to_string(),
+        "WebSearch".to_string(),
+        "WebFetch".to_string(),
         "mcp__farga__search_signals".to_string(),
         "mcp__farga__read_context".to_string(),
         "mcp__farga__list_projects".to_string(),
@@ -1210,9 +1420,9 @@ fn guilhem_allowed_tools() -> Vec<String> {
         "mcp__charradissa__matrix_get_dm".to_string(),
         "mcp__charradissa__matrix_leave".to_string(),
         "mcp__charradissa__matrix_read".to_string(),
+        "mcp__charradissa__matrix_request_approval".to_string(),
         "mcp__nervi__nervi_publish".to_string(),
         "mcp__nervi__nervi_subscribe".to_string(),
-        "mcp__charradissa__matrix_request_approval".to_string(),
     ]
 }
 

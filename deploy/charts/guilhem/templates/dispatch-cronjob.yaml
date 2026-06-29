@@ -1,0 +1,47 @@
+{{- if .Values.dispatch.schedule }}
+# Post-dream dispatch — Guilhem translates the dream synthesis and adversarial challenge
+# proposals into specific component tasks. Fires 1h after the dream (04:00 UTC) to give
+# the dream time to complete and write its Farga signals.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: guilhem-dispatch
+  namespace: agents
+  labels:
+    app.kubernetes.io/name: guilhem-dispatch
+    app.kubernetes.io/part-of: occitan
+spec:
+  schedule: {{ .Values.dispatch.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 1800
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: dispatch-trigger
+              image: curlimages/curl:8.11.0
+              command:
+                - curl
+                - --fail
+                - --silent
+                - --show-error
+                - --max-time
+                - "60"
+                - -X
+                - POST
+                - http://guilhem.agents.svc.cluster.local:8080/trigger/dispatch
+                - -H
+                - "Content-Type: application/json"
+                - -d
+                - '{"reason":"post-dream dispatch"}'
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 16Mi
+                limits:
+                  memory: 32Mi
+{{- end }}

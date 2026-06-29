@@ -4,11 +4,13 @@
 ///   - /health endpoints for Gardian, Farga, Amassada, Charradissa, Guilhem, Dispatcher
 ///   - Farga recent signals (at least one means the chronicle cron has run before)
 ///
-/// On any anomaly, writes a bug-signal to Farga (project: occitan, source: sre-watchdog).
+/// On any anomaly, writes a bug-signal to Farga (project: occitan, source: sre-watchdog)
+/// AND publishes structured alert to occitan.sre.alerts NATS subject via Nervi MCP so
+/// Guilhem's sre-alert trigger can read and dispatch without polling Farga.
 /// Exits only on fatal startup errors — probe failures are logged and signalled, not fatal.
 ///
 /// All service URLs default to cluster-internal DNS and can be overridden via env vars:
-///   FARGA_URL, GARDIAN_URL, AMASSADA_URL, CHARRADISSA_URL, GUILHEM_URL, DISPATCHER_URL
+///   FARGA_URL, NERVI_MCP_URL, GARDIAN_URL, AMASSADA_URL, CHARRADISSA_URL, GUILHEM_URL, DISPATCHER_URL
 ///   WATCHDOG_INTERVAL_SECS (default 300)
 ///   WATCHDOG_PROJECT (default: occitan)
 
@@ -19,6 +21,7 @@ pub async fn run() -> anyhow::Result<()> {
     let config = load_config().unwrap_or_default();
 
     let farga_url = std::env::var("FARGA_URL").unwrap_or(config.farga_url.clone());
+    let nervi_mcp_url = std::env::var("NERVI_MCP_URL").unwrap_or(config.nervi_mcp_url.clone());
     let project = std::env::var("WATCHDOG_PROJECT").unwrap_or(config.project.clone());
     // Env overrides take precedence over caissa.toml for k8s deployments.
     let interval_secs: u64 = std::env::var("WATCHDOG_INTERVAL_SECS")
@@ -102,7 +105,12 @@ pub async fn run() -> anyhow::Result<()> {
             );
             tracing::warn!("posting bug-signal: {}", content);
             if let Err(e) = post_bug_signal(&client, &farga_url, &project, &content).await {
-                tracing::error!("failed to post bug-signal: {}", e);
+                tracing::error!("failed to post bug-signal to Farga: {}", e);
+            }
+            // Also publish to occitan.sre.alerts so Guilhem's sre-alert handler
+            // can read and dispatch via nervi_subscribe without needing to poll Farga.
+            if let Err(e) = publish_sre_alert(&client, &nervi_mcp_url, &project, &anomalies).await {
+                tracing::warn!("failed to publish to occitan.sre.alerts (Guilhem will fall back to Farga): {}", e);
             }
         } else {
             tracing::info!("all clear");
@@ -132,5 +140,53 @@ async fn post_bug_signal(
         .send()
         .await?
         .error_for_status()?;
+    Ok(())
+}
+
+/// Publish structured SRE alert to occitan.sre.alerts via Nervi MCP.
+/// Best-effort — failure is logged but does not abort the watchdog loop.
+async fn publish_sre_alert(
+    client: &reqwest::Client,
+    nervi_mcp_url: &str,
+    project: &str,
+    anomalies: &[String],
+) -> anyhow::Result<()> {
+    let alert_payload = json!({
+        "project": project,
+        "source": "sre-watchdog",
+        "anomaly_count": anomalies.len(),
+        "anomalies": anomalies,
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    });
+
+    let mcp_body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "nervi_publish",
+            "arguments": {
+                "subject": "occitan.sre.alerts",
+                "payload": alert_payload.to_string()
+            }
+        }
+    });
+
+    // Nervi MCP uses streamable-http (SSE response). We fire-and-forget:
+    // send the request and consume enough of the response to release the connection.
+    let resp = client
+        .post(nervi_mcp_url)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json, text/event-stream")
+        .json(&mcp_body)
+        .send()
+        .await?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        anyhow::bail!("nervi MCP returned {}", status);
+    }
+
+    tracing::info!("published {} anomaly(-ies) to occitan.sre.alerts", anomalies.len());
     Ok(())
 }
