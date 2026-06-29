@@ -58,7 +58,11 @@ struct ListenState {
     dream_matrix_room_id: String,
     /// One persistent agent-sidecar.js child process per actively-chatting
     /// Matrix room. Reaped by an idle-timeout sweep (see spawn_idle_reaper).
-    room_sessions: Arc<tokio::sync::RwLock<HashMap<String, RoomSession>>>,
+    /// The outer Mutex protects the map (held only for map operations, never
+    /// across the Claude API call). Each entry's inner Mutex serialises
+    /// concurrent messages for the same room while allowing different rooms
+    /// to run in parallel.
+    room_sessions: Arc<tokio::sync::Mutex<HashMap<String, RoomSession>>>,
 }
 
 /// A running agent-sidecar.js child process for one room.
@@ -139,8 +143,14 @@ struct SidecarInit {
 
 /// One room's live session: the running sidecar child process, and when it
 /// last handled a message.
+///
+/// `process` is behind its own `Arc<Mutex>` so the outer map lock can be
+/// released before the Claude API call. Different rooms run in parallel;
+/// two messages for the same room serialise on the per-room Mutex.
+/// `last_activity` is updated under the outer map lock so the idle reaper
+/// can inspect it without touching the inner Mutex.
 struct RoomSession {
-    process: SidecarProcess,
+    process: std::sync::Arc<tokio::sync::Mutex<SidecarProcess>>,
     last_activity: std::time::Instant,
 }
 
@@ -164,7 +174,9 @@ impl RoomSession {
             (child, stdin, stdout)
         });
         Self {
-            process: SidecarProcess { child, stdin, stdout: tokio::io::BufReader::new(stdout) },
+            process: std::sync::Arc::new(tokio::sync::Mutex::new(
+                SidecarProcess { child, stdin, stdout: tokio::io::BufReader::new(stdout) },
+            )),
             last_activity,
         }
     }
@@ -213,7 +225,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         backlog_matrix_room_id: std::env::var("BACKLOG_MATRIX_ROOM_ID").unwrap_or_default(),
         dream_model: config.dream_model,
         dream_matrix_room_id: std::env::var("DREAM_MATRIX_ROOM_ID").unwrap_or_default(),
-        room_sessions: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
+        room_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
     });
 
     tokio::spawn(spawn_idle_reaper(Arc::clone(&state.room_sessions)));
@@ -869,46 +881,67 @@ The internal debate is yours alone — it does not appear in output.\n\
 }
 
 async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::Result<String> {
-    let mut sessions = state.room_sessions.write().await;
+    // Phase 1: get or create the per-room process handle under the outer map
+    // lock. The outer lock is held across the spawn() await (fast — just a
+    // fork), but is released BEFORE the Claude API call so different rooms
+    // can run in parallel.
+    let process_arc: std::sync::Arc<tokio::sync::Mutex<SidecarProcess>> = {
+        let mut sessions = state.room_sessions.lock().await;
 
-    // If a session exists but its sidecar process has died (crash, OOM, fatal
-    // SDK error), drop the stale entry so we fall through to a fresh spawn
-    // below instead of writing/reading on a dead pipe.
-    if let Some(session) = sessions.get_mut(&req.room_id) {
-        if !session.process.is_alive() {
-            tracing::warn!("sidecar for room {} has died; respawning", req.room_id);
-            sessions.remove(&req.room_id);
+        // If a session exists but its sidecar has died (crash, OOM, fatal SDK
+        // error), drop the stale entry so we fall through to a fresh spawn.
+        // try_lock() is non-blocking: if another handler is mid-call the
+        // process IS alive, so we skip the is_alive() check safely.
+        if let Some(session) = sessions.get_mut(&req.room_id) {
+            let dead = session.process.try_lock()
+                .map(|mut p| !p.is_alive())
+                .unwrap_or(false); // locked by another handler → alive
+            if dead {
+                tracing::warn!("sidecar for room {} has died; respawning", req.room_id);
+                sessions.remove(&req.room_id);
+            }
         }
+
+        if !sessions.contains_key(&req.room_id) {
+            // The sidecar process is long-lived (one per room, reused across
+            // messages) — always attach the full tool/MCP set so capability
+            // doesn't get frozen at whatever the room's first message needed.
+            let (system_prompt, skills) = resolve_guilhem_prompt(&state.fondament_path, &state.generation, &req.room_id);
+            let init = SidecarInit {
+                system_prompt,
+                model: state.matrix_model.clone(),
+                allowed_tools: guilhem_allowed_tools(),
+                skills,
+                mcp_servers: guilhem_mcp_servers(state),
+            };
+
+            // spawn() is async but fast (just a fork) — OK to await while
+            // holding the outer map lock.
+            let process = SidecarProcess::spawn(&init).await?;
+            sessions.insert(
+                req.room_id.clone(),
+                RoomSession {
+                    process: std::sync::Arc::new(tokio::sync::Mutex::new(process)),
+                    last_activity: std::time::Instant::now(),
+                },
+            );
+        }
+
+        std::sync::Arc::clone(&sessions[&req.room_id].process)
+        // outer map lock released here — other rooms can now run in parallel
+    };
+
+    // Phase 2: Claude API call — no outer map lock held. Two messages for the
+    // same room serialise on process_arc's Mutex; different rooms run freely.
+    let reply = {
+        let mut process = process_arc.lock().await;
+        process.send(&req.sender, &req.content).await?
+    };
+
+    // Phase 3: update last_activity under the outer lock (brief).
+    if let Some(session) = state.room_sessions.lock().await.get_mut(&req.room_id) {
+        session.last_activity = std::time::Instant::now();
     }
-
-    if !sessions.contains_key(&req.room_id) {
-        // The sidecar process is now long-lived (one per room, reused across
-        // messages), so the MCP handshake cost is paid once per session
-        // rather than once per message — always attach the full tool/MCP
-        // set so capability doesn't get frozen at whatever the room's first
-        // message happened to need.
-        let mcp_servers = guilhem_mcp_servers(state);
-        let allowed_tools = guilhem_allowed_tools();
-
-        let (system_prompt, skills) = resolve_guilhem_prompt(&state.fondament_path, &state.generation, &req.room_id);
-        let init = SidecarInit {
-            system_prompt,
-            model: state.matrix_model.clone(),
-            allowed_tools,
-            skills,
-            mcp_servers,
-        };
-
-        let process = SidecarProcess::spawn(&init).await?;
-        sessions.insert(
-            req.room_id.clone(),
-            RoomSession { process, last_activity: std::time::Instant::now() },
-        );
-    }
-
-    let session = sessions.get_mut(&req.room_id).expect("just inserted or already present");
-    let reply = session.process.send(&req.sender, &req.content).await?;
-    session.last_activity = std::time::Instant::now();
 
     Ok(reply)
 }
@@ -1021,22 +1054,27 @@ async fn run_turn(state: &ListenState, req: &TurnReq) -> anyhow::Result<String> 
 /// Periodically kills and removes any RoomSession that's been idle past
 /// the timeout, releasing its sidecar process. Spawned once at startup
 /// alongside the existing chronicle/archival background loops.
-async fn spawn_idle_reaper(room_sessions: Arc<tokio::sync::RwLock<HashMap<String, RoomSession>>>) {
+async fn spawn_idle_reaper(room_sessions: Arc<tokio::sync::Mutex<HashMap<String, RoomSession>>>) {
     const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
     const SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
     loop {
         tokio::time::sleep(SWEEP_INTERVAL).await;
-        let mut sessions = room_sessions.write().await;
+        let mut sessions = room_sessions.lock().await;
         let idle_rooms: Vec<String> = sessions
             .iter()
             .filter(|(_, s)| s.is_idle(IDLE_TIMEOUT))
             .map(|(room, _)| room.clone())
             .collect();
         for room in idle_rooms {
-            if let Some(mut session) = sessions.remove(&room) {
+            if let Some(session) = sessions.remove(&room) {
                 tracing::info!("reaping idle session for room {}", room);
-                session.process.kill();
+                // try_lock: if a handler is mid-call the Arc keeps the process
+                // alive until it finishes; the pipes close when the last Arc
+                // clone is dropped, sending EOF/EPIPE to the sidecar naturally.
+                if let Ok(mut proc) = session.process.try_lock() {
+                    proc.kill();
+                }
             }
         }
     }
@@ -1081,7 +1119,7 @@ mod session_supervisor_tests {
 
     #[test]
     fn sidecar_process_is_not_alive_after_child_exits() {
-        let mut session = RoomSession::for_test(Instant::now());
+        let session = RoomSession::for_test(Instant::now());
 
         // /bin/true exits immediately; poll try_wait until the exit is
         // observed (avoids a flaky fixed sleep) using a throwaway runtime,
@@ -1092,14 +1130,15 @@ mod session_supervisor_tests {
             .expect("build runtime for test");
         rt.block_on(async {
             for _ in 0..100 {
-                if matches!(session.process.child.try_wait(), Ok(Some(_))) {
+                let mut proc = session.process.lock().await;
+                if matches!(proc.child.try_wait(), Ok(Some(_))) {
                     break;
                 }
+                drop(proc);
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
+            assert!(!session.process.lock().await.is_alive());
         });
-
-        assert!(!session.process.is_alive());
     }
 }
 
