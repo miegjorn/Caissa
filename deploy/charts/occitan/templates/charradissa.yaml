@@ -103,6 +103,8 @@ spec:
                   key: as-token
             - name: FARGA_URL
               value: "http://farga:{{ .Values.farga.port }}"
+            - name: APPROVAL_ROOM_ID
+              value: {{ .Values.charradissa.approvalRoomId | default "" | quote }}
           volumeMounts:
             - name: config
               mountPath: /config

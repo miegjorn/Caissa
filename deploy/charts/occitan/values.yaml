@@ -66,6 +66,9 @@ charradissa:
   imageTag: sha-3ed64db # CI writes sha-<sha> here on every main push
   replicas: 1
   port: 8448
+  # Matrix room ID for the shared code-approval room. Agents call matrix_request_approval
+  # which posts here; humans reply /approve <id> or /reject <id> <reason>.
+  approvalRoomId: "!BokftqVryoxAylmNbs:occitane.guilhem"
   env:
     CHARRADISSA_CONFIG: /config/charradissa.toml
     GUILHEM_URL: "http://guilhem.agents.svc.cluster.local:8080"
