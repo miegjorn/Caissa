@@ -304,6 +304,10 @@ data:
           kind: mcp
           server: charradissa
           tool: matrix_get_dm
+        - id: charradissa-matrix-leave
+          kind: mcp
+          server: charradissa
+          tool: matrix_leave
       jit: []
     skills:
       - superpowers:brainstorming
