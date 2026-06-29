@@ -114,6 +114,8 @@ charradissa:
           agentUrl: "http://caissa-agent.agents.svc.cluster.local:8080"
         - roomId: "!tGdWTCTRPPXgnWrhad:occitane.guilhem"
           agentUrl: "http://charradissa-agent.agents.svc.cluster.local:8080"
+        - roomId: "!HUzSiveWLbgEsjzIFt:occitane.guilhem"
+          agentUrl: "http://nervi-agent.agents.svc.cluster.local:8080"
           # ANTHROPIC_API_KEY from 'anthropic' secret; MATRIX_AS_TOKEN from 'charradissa' secret.
 # ─── Synapse (Matrix homeserver) ─────────────────────────────────────────────
 synapse:
