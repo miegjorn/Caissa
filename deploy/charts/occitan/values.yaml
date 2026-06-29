@@ -45,7 +45,21 @@ amassada:
   env:
     AMASSADA_PORT: "7700"
     AMASSADA_CANVAS_DIR: /canvases/stdlib
+    # Project registry path — mounted from the amassada-projects ConfigMap below.
+    AMASSADA_PROJECTS_PATH: /config/projects.toml
     # ANTHROPIC_API_KEY is injected from the 'anthropic' secret (key: api-key).
+  # Project registry (multi-tenant dispatch). Maps Matrix rooms → Fondament
+  # persona + Farga project + MCP scopes. Empty by default: Guilhem runs via the
+  # org-session canvas fallback. Add [[projects]] entries to onboard project agents.
+  # Format: see the Amassada README "Project registry (projects.toml)" section.
+  projects: |
+    # Amassada project registry. Empty — no projects registered yet.
+    # [[projects]]
+    # id = "example-agent"
+    # fondament_persona = "fondament/projects/example-agent"
+    # matrix_rooms = ["!exampleRoomId:occitane.guilhem"]
+    # farga_project = "example-agent"
+    # mcp_scopes = ["farga:read", "farga:write:example-agent"]
 # ─── Charradissa ─────────────────────────────────────────────────────────────
 charradissa:
   image: ghcr.io/miegjorn/charradissa
