@@ -240,6 +240,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         .route("/trigger/sre-alert", post(handle_sre_alert))
         .route("/trigger/backlog-review", post(handle_backlog_review))
         .route("/trigger/dream", post(handle_dream))
+        .route("/trigger/scan", post(handle_scan))
         .route("/matrix/reply", post(handle_matrix_reply))
         .route("/turn", post(handle_turn))
         .route("/health", axum::routing::get(|| async { "ok" }))
@@ -775,6 +776,192 @@ For each opportunity you identify, decide:
 Do not just narrate what you did. Chronicle what the stack is becoming.
 "###,
         project = project
+    )
+}
+
+// ── Code scan + doc reconciliation ───────────────────────────────────────────
+
+/// POST /trigger/scan — weekly CronJob per component agent.
+///
+/// Clones the component's GitHub repo, inspects code for TODOs / unimplemented
+/// stubs / doc drift, deduplicates against open GitHub issues, creates new
+/// issues for gaps found, optionally opens a README PR so Cartulari picks it
+/// up, and writes a Farga signal summarising the run.
+async fn handle_scan(
+    State(state): State<Arc<ListenState>>,
+    Json(req): Json<TriggerReq>,
+) -> StatusCode {
+    tracing::info!("scan trigger received: {}", req.reason);
+
+    tokio::spawn(async move {
+        match run_scan(&state).await {
+            Ok(_) => tracing::info!("scan complete"),
+            Err(e) => tracing::error!("scan failed: {}", e),
+        }
+    });
+
+    StatusCode::ACCEPTED
+}
+
+async fn run_scan(state: &ListenState) -> anyhow::Result<()> {
+    let mcp_config = format!(
+        r#"{{"mcpServers":{{"farga":{{"type":"http","url":"{}"}}}}}}"#,
+        state.farga_mcp_url
+    );
+    let mcp_path = std::env::temp_dir().join("caissa-scan-mcp.json");
+    std::fs::write(&mcp_path, &mcp_config)?;
+
+    let prompt = build_scan_prompt(&state.farga_project);
+
+    let output = tokio::process::Command::new("claude")
+        .args([
+            "--print",
+            &prompt,
+            "--model",
+            &state.chronicle_model,
+            "--mcp-config",
+            mcp_path.to_str().unwrap(),
+            "--allowed-tools",
+            "Bash,mcp__farga__write_signal,mcp__farga__read_context,mcp__farga__search_signals",
+        ])
+        .env("FARGA_URL", &state.farga_url)
+        .env("FARGA_PROJECT", &state.farga_project)
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("scan claude exited with error: {}", stderr);
+    }
+
+    let report = String::from_utf8_lossy(&output.stdout).to_string();
+    if !report.trim().is_empty() {
+        post_signal(state, &report).await?;
+    }
+
+    Ok(())
+}
+
+fn build_scan_prompt(component: &str) -> String {
+    // GitHub repo name: capitalize first letter of component slug.
+    let repo = {
+        let mut c = component.chars();
+        match c.next() {
+            None => String::new(),
+            Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        }
+    };
+
+    format!(
+        r###"You are the {component} component agent running a weekly code scan and
+documentation reconciliation for the `miegjorn/{repo}` repository.
+
+Your job has four phases. Complete them in order.
+
+---
+
+## PHASE 1: READ FARGA CONTEXT
+
+Read the current project context so you understand what is intentionally deferred
+vs genuinely missing:
+
+- `mcp__farga__read_context` (project: "{component}")
+- `mcp__farga__search_signals` (project: "{component}") — look for recent scan signals
+  to avoid re-filing issues already created in the last 7 days
+
+---
+
+## PHASE 2: CLONE AND INSPECT THE CODEBASE
+
+```bash
+cd /tmp && rm -rf scan-{component} && gh repo clone miegjorn/{repo} scan-{component} -- --depth=1 2>&1
+cd /tmp/scan-{component}
+```
+
+Run these inspections and collect the findings:
+
+**2a. Code stubs and deferred work:**
+```bash
+grep -rn \
+  --include="*.rs" --include="*.ts" --include="*.js" --include="*.py" --include="*.go" \
+  -E "TODO|FIXME|HACK|unimplemented!\(\)|todo!\(\)|panic!\(\"not implemented\"\)|raise NotImplementedError" \
+  . | grep -v "\.git/" | grep -v "/target/" | grep -v "node_modules/"
+```
+
+**2b. Spec/doc references in README that may not exist in code:**
+```bash
+# Extract endpoint paths, function names, config keys from README
+grep -E "^#+|`[A-Z_]{{3,}}`|POST |GET |PUT |DELETE |\bfn [a-z]|\[.*\]\(#" README.md 2>/dev/null || true
+```
+
+**2c. Public API surface in code not mentioned in README:**
+```bash
+# Rust: public functions and structs
+grep -rn --include="*.rs" -E "^pub (async )?fn |^pub struct " src/ 2>/dev/null | head -40 || true
+# TypeScript: exported functions
+grep -rn --include="*.ts" -E "^export (async )?function |^export class " src/ 2>/dev/null | head -40 || true
+```
+
+**2d. Config keys referenced in code vs documented:**
+```bash
+grep -rn --include="*.rs" --include="*.ts" -E \
+  "env::var\(|process\.env\.|std::env::var" . | grep -v "\.git/" | grep -v target/ | head -30 || true
+```
+
+**2e. Read the full README:**
+```bash
+cat README.md 2>/dev/null || echo "No README.md found"
+```
+
+---
+
+## PHASE 3: RECONCILE AND CREATE ISSUES
+
+For each gap you identify, before creating an issue:
+
+1. Check for an existing open issue:
+   ```bash
+   gh issue list --repo miegjorn/{repo} --state open \
+     --search "<key term from the gap>" --json number,title | head -5
+   ```
+2. If no duplicate exists, create an issue:
+   ```bash
+   gh issue create \
+     --repo miegjorn/{repo} \
+     --title "<concise, specific title>" \
+     --body "## Context\n<what was found and why it matters>\n\n## Proposed fix\n<what the resolution would look like>\n\n## Source\nIdentified by weekly code scan ({component} agent, $(date +%Y-%m-%d))." \
+     --label "technical-debt"
+   ```
+
+**Issue triage rules:**
+- `unimplemented!()` / `todo!()` with no open issue → create `technical-debt` issue
+- README documents an endpoint that doesn't exist in code → `documentation` + `bug`
+- Public function exists but is undocumented in README → `documentation`
+- Config key referenced in code but absent from README/docs → `documentation`
+- FIXME/HACK comment that's been there for > 30 days → `technical-debt`
+
+Aim for quality over quantity — file 3–8 issues maximum. If the codebase is clean,
+say so and file nothing.
+
+---
+
+## PHASE 4: WRITE FARGA SIGNAL
+
+Write a scan signal using `mcp__farga__write_signal`:
+- project: "{component}"
+- source: "scan"
+- content: structured summary:
+  - Date of scan
+  - Stubs/TODOs found (count + worst offenders)
+  - Doc drift identified (count)
+  - Issues created (with URLs)
+  - Issues skipped (already existed)
+  - Overall health assessment: clean / minor gaps / significant gaps
+
+Your written response IS the scan report. Be precise and brief.
+"###,
+        component = component,
+        repo = repo,
     )
 }
 

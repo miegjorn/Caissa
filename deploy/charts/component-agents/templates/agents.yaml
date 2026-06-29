@@ -245,3 +245,52 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
 {{- end }}
+{{- range $.Values.agents }}
+---
+# Weekly code scan + doc reconciliation for {{ .name }}.
+# Fires Sunday 02:00 UTC — before Monday 04:00 Cartulari harvest so any README
+# PRs opened by the scan are visible to Cartulari's next run.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .name }}-scan
+  namespace: agents
+  labels:
+    app.kubernetes.io/name: {{ .name }}-scan
+    app.kubernetes.io/part-of: occitan
+    occitan/component: {{ .name }}
+spec:
+  schedule: "0 2 * * 0"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 1800
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: scan-trigger
+              image: curlimages/curl:8.11.0
+              command:
+                - curl
+                - --fail
+                - --silent
+                - --show-error
+                - --max-time
+                - "60"
+                - -X
+                - POST
+                - http://{{ .name }}-agent.agents.svc.cluster.local:8080/trigger/scan
+                - -H
+                - "Content-Type: application/json"
+                - -d
+                - '{"reason":"scheduled weekly code scan"}'
+              resources:
+                requests:
+                  cpu: 5m
+                  memory: 16Mi
+                limits:
+                  memory: 32Mi
+{{- end }}
