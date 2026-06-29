@@ -234,6 +234,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
     });
 
     tokio::spawn(spawn_idle_reaper(Arc::clone(&state.room_sessions)));
+    tokio::spawn(run_nervi_loop_if_component(Arc::clone(&state)));
 
     let app = Router::new()
         .route("/trigger/chronicle", post(handle_chronicle))
@@ -355,22 +356,25 @@ If no alerts are found in either source:
 - Do not dispatch.
 
 If alerts ARE found, for each anomaly identify the responsible component:
-- "gardian" → Gardian (room: !hNBIrYgqZxPsnBntbY:occitane.guilhem)
-- "farga" → Farga (room: !kIDEzlMzVRRXveGVpL:occitane.guilhem)
-- "amassada" → Amassada (room: !AftizZpcNgfIUgqFQt:occitane.guilhem)
-- "charradissa" → Charradissa (room: !tGdWTCTRPPXgnWrhad:occitane.guilhem)
-- "dispatcher" → Caissa (room: !fquiGtdiWSOUyYhYUV:occitane.guilhem)
-- "nervi" → Nervi (room: !HUzSiveWLbgEsjzIFt:occitane.guilhem)
+- "gardian" → dispatch subject: occitan.dispatch.gardian
+- "farga" → dispatch subject: occitan.dispatch.farga
+- "amassada" → dispatch subject: occitan.dispatch.amassada
+- "charradissa" → dispatch subject: occitan.dispatch.charradissa
+- "dispatcher" → dispatch subject: occitan.dispatch.caissa
+- "nervi" → dispatch subject: occitan.dispatch.nervi
 - "guilhem" → Escalate via Farga (cannot dispatch to yourself; write to Farga source="guilhem-sre-escalate")
 
 ## STEP 3 — Dispatch
 
-For each affected component, send a targeted repair task via matrix_send:
-- room_id: the component's room ID from the map above
-- message: "[SRE DISPATCH] Watchdog anomaly detected: <specific error description>.
-  Please investigate: check /health endpoint, review recent pod logs for errors,
-  identify root cause. If a code fix is needed, open a PR following the standard
-  issue→implement→PR→approval flow. Confirm when resolved or if you need help."
+For each affected component, publish a repair task to its Nervi dispatch subject:
+nervi_publish(subject="occitan.dispatch.<component>", payload=JSON.stringify({
+  "type": "sre-repair",
+  "anomaly": "<specific error description>",
+  "task": "Investigate: check /health endpoint, review recent pod logs for errors, identify root cause. If a code fix is needed, open a PR following the standard issue→implement→PR→approval flow.",
+  "class": 1,
+  "dispatched_by": "guilhem-sre",
+  "review_required": false
+}))
 
 ## STEP 4 — Record
 
@@ -1167,12 +1171,13 @@ For each actionable item in the dream report and each challenge proposal:
 
 **Class 1 — Dispatch autonomously:**
 - Scoped to one component, reversible, no interface change
-- Send a targeted Matrix dispatch message to the responsible component's room:
-  matrix_send(room_id="<room>", message="[GUILHEM DISPATCH — {today}] Task: <specific, scoped task description>. Context: <why this matters, from the dream>. Expected outcome: <a PR with what specific change>. Risk class: 1 — implement autonomously, follow standard issue→implement→PR flow.")
+- Publish to the component's Nervi dispatch subject:
+  nervi_publish(subject="occitan.dispatch.<component>", payload=JSON.stringify({{"type":"dispatch","task":"<specific, scoped task description>","context":"<why this matters, from the dream>","outcome":"<a PR with what specific change>","class":1,"dispatched_by":"guilhem","date":"{today}","review_required":false}}))
 
 **Class 2 — Dispatch with review flag:**
 - Cross-component reads, new internal APIs, ambiguous scope
-- Dispatch as above but add: "Risk class: 2 — open as draft PR; wait for Guilhem review before merging."
+- Same as Class 1 but set "class":2 and "review_required":true in the payload.
+  The component agent opens a draft PR and writes a Farga signal for your review before merging.
 
 **Class 3 — Surface to Pierre-Luc:**
 - Public interface changes, new cross-component protocols, Fondament definition changes
@@ -1196,21 +1201,25 @@ Write a Farga signal summarising all dispatch decisions:
 - content: Structured list of dispatched / deferred / rejected items with rationale.
   Include: how many were dispatched, how many deferred for Pierre-Luc, how many rejected.
 
-## Component room IDs
+## Component Nervi dispatch subjects
 
-| Component | Matrix room |
-|-----------|-------------|
-| gardian | !hNBIrYgqZxPsnBntbY:occitane.guilhem |
-| fondament | !yYNPBBfRcPAMfpyAeB:occitane.guilhem |
-| farga | !kIDEzlMzVRRXveGVpL:occitane.guilhem |
-| amassada | !AftizZpcNgfIUgqFQt:occitane.guilhem |
-| cor | !SRtFNNEbgkATYOLktl:occitane.guilhem |
-| caissa | !fquiGtdiWSOUyYhYUV:occitane.guilhem |
-| charradissa | !tGdWTCTRPPXgnWrhad:occitane.guilhem |
-| nervi | !HUzSiveWLbgEsjzIFt:occitane.guilhem |
+| Component | Dispatch subject |
+|-----------|-----------------|
+| gardian | occitan.dispatch.gardian |
+| fondament | occitan.dispatch.fondament |
+| farga | occitan.dispatch.farga |
+| amassada | occitan.dispatch.amassada |
+| cor | occitan.dispatch.cor |
+| caissa | occitan.dispatch.caissa |
+| charradissa | occitan.dispatch.charradissa |
+| nervi | occitan.dispatch.nervi |
+
+The component agent pod consumes from this subject via its Nervi subscriber loop.
+It will read the task, spawn the appropriate specialist agents (developer/QA/reviewer/librarian)
+via the Dispatcher, and escalate back to you if confidence is low.
 
 Remember: dispatching is not implementation. You formulate the task precisely and route it
-to the right agent. The agent implements; you review and approve.
+to the right agent. The agent orchestrates; you review and approve.
 "###,
         today = chrono::Utc::now().format("%Y-%m-%d"),
     )
@@ -1424,6 +1433,262 @@ fn guilhem_allowed_tools() -> Vec<String> {
         "mcp__nervi__nervi_publish".to_string(),
         "mcp__nervi__nervi_subscribe".to_string(),
     ]
+}
+
+// ── Component agent Nervi subscriber loop ────────────────────────────────────
+//
+// Non-Guilhem pods (generation ends with "-agent") run a Nervi polling loop
+// alongside the HTTP server. The loop subscribes to:
+//   occitan.issues.<component>   — GitHub issues synced by the daily issue-sync CronJob
+//   occitan.dispatch.<component> — tasks published by Guilhem's dispatch cycle
+// When messages arrive, it spawns a Claude session that acts as an orchestrator:
+// reading the task, checking Farga context, and invoking specialist agents
+// (developer / QA / reviewer / librarian) via the Dispatcher MCP.
+
+fn is_component_agent(state: &ListenState) -> bool {
+    state.generation.ends_with("-agent") && state.farga_project != "occitan"
+}
+
+async fn run_nervi_loop_if_component(state: Arc<ListenState>) {
+    if !is_component_agent(&state) {
+        return;
+    }
+    let component = state.farga_project.clone();
+    tracing::info!("[component-agent/{component}] Nervi subscriber loop starting");
+    loop {
+        let issues_subject = format!("occitan.issues.{component}");
+        let dispatch_subject = format!("occitan.dispatch.{component}");
+
+        let mut tagged: Vec<serde_json::Value> = Vec::new();
+
+        match poll_nervi_subject(&state, &issues_subject, 20).await {
+            Ok(msgs) if !msgs.is_empty() => {
+                tracing::info!("[component-agent/{component}] {} issue messages", msgs.len());
+                for m in msgs {
+                    tagged.push(serde_json::json!({"type": "issue", "data": m}));
+                }
+            }
+            Err(e) => tracing::warn!("[component-agent/{component}] issues poll error: {e}"),
+            _ => {}
+        }
+
+        match poll_nervi_subject(&state, &dispatch_subject, 10).await {
+            Ok(msgs) if !msgs.is_empty() => {
+                tracing::info!("[component-agent/{component}] {} dispatch messages", msgs.len());
+                for m in msgs {
+                    tagged.push(serde_json::json!({"type": "dispatch", "data": m}));
+                }
+            }
+            Err(e) => tracing::warn!("[component-agent/{component}] dispatch poll error: {e}"),
+            _ => {}
+        }
+
+        if !tagged.is_empty() {
+            let payload = serde_json::to_string(&tagged).unwrap_or_default();
+            if let Err(e) = run_component_agent(&state, &component, &payload).await {
+                tracing::error!("[component-agent/{component}] agent run failed: {e}");
+            }
+        }
+
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+    }
+}
+
+/// Direct HTTP call to the Nervi MCP server to drain messages from a subject.
+/// Returns the parsed message array; empty vec on any parse failure.
+async fn poll_nervi_subject(state: &ListenState, subject: &str, max_messages: u32) -> anyhow::Result<Vec<serde_json::Value>> {
+    if state.nervi_mcp_url.is_empty() {
+        return Ok(vec![]);
+    }
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "nervi_subscribe",
+            "arguments": {
+                "subject": subject,
+                "max_messages": max_messages,
+                "timeout_ms": 5000
+            }
+        }
+    });
+    let resp = client
+        .post(&state.nervi_mcp_url)
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await?
+        .json::<serde_json::Value>()
+        .await?;
+    Ok(parse_nervi_messages(&resp))
+}
+
+/// Parse the MCP tools/call response for nervi_subscribe.
+/// MCP wraps the result in: {"result":{"content":[{"type":"text","text":"[...]"}]}}
+fn parse_nervi_messages(resp: &serde_json::Value) -> Vec<serde_json::Value> {
+    if let Some(text) = resp
+        .get("result")
+        .and_then(|r| r.get("content"))
+        .and_then(|c| c.as_array())
+        .and_then(|a| a.first())
+        .and_then(|item| item.get("text"))
+        .and_then(|t| t.as_str())
+    {
+        if let Ok(msgs) = serde_json::from_str::<Vec<serde_json::Value>>(text) {
+            return msgs;
+        }
+    }
+    // Fallback: result is directly an array
+    resp.get("result")
+        .and_then(|r| r.as_array())
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn component_mcp_servers(state: &ListenState) -> serde_json::Value {
+    // Component agents have no Charradissa (they don't live in Matrix rooms).
+    serde_json::json!({
+        "farga":      { "type": "http", "url": state.farga_mcp_url },
+        "dispatcher": { "type": "http", "url": state.dispatcher_mcp_url },
+        "nervi":      { "type": "http", "url": state.nervi_mcp_url },
+    })
+}
+
+fn component_allowed_tools() -> Vec<&'static str> {
+    vec![
+        "Bash",
+        "mcp__farga__search_signals",
+        "mcp__farga__read_context",
+        "mcp__farga__write_signal",
+        "mcp__farga__update_component_todo",
+        "mcp__dispatcher__invoke_agent",
+        "mcp__dispatcher__get_agent_result",
+        "mcp__dispatcher__list_agent_specs",
+        "mcp__nervi__nervi_publish",
+        "mcp__nervi__nervi_subscribe",
+    ]
+}
+
+/// Invoke Claude as the component agent orchestrator for a batch of Nervi messages.
+async fn run_component_agent(state: &ListenState, component: &str, payload: &str) -> anyhow::Result<()> {
+    let mcp_config = serde_json::to_string(&serde_json::json!({
+        "mcpServers": component_mcp_servers(state)
+    }))?;
+    let mcp_path = std::env::temp_dir().join(format!("{component}-agent-mcp.json"));
+    std::fs::write(&mcp_path, &mcp_config)?;
+
+    let persona_context = load_component_persona(state, component);
+    let prompt = build_component_agent_prompt(component, &state.farga_project, payload, &persona_context);
+    let tools = component_allowed_tools().join(",");
+
+    let output = tokio::process::Command::new("claude")
+        .args([
+            "--print",
+            &prompt,
+            "--model",
+            &state.chronicle_model,
+            "--mcp-config",
+            mcp_path.to_str().unwrap(),
+            "--allowed-tools",
+            &tools,
+        ])
+        .env("FARGA_URL", &state.farga_url)
+        .env("FARGA_PROJECT", &state.farga_project)
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("component agent exited non-zero: {stderr}");
+    }
+
+    let response = String::from_utf8_lossy(&output.stdout).to_string();
+    if !response.trim().is_empty() {
+        post_signal(state, &response).await?;
+    }
+    Ok(())
+}
+
+fn load_component_persona(state: &ListenState, component: &str) -> String {
+    let def_name = format!("{component}-agent");
+    match load_fondament_def(&state.fondament_path, &def_name) {
+        Ok(def) => def.context,
+        Err(_) => format!("You are the {component} component agent for the Occitan stack."),
+    }
+}
+
+fn build_component_agent_prompt(component: &str, project: &str, payload: &str, persona_context: &str) -> String {
+    format!(
+        r###"{persona_context}
+
+---
+
+## Nervi message batch
+
+Messages received from Nervi subjects for component "{component}" (project "{project}"):
+
+```json
+{payload}
+```
+
+Each entry has: `"type"` ("issue" or "dispatch") and `"data"` containing the payload.
+
+---
+
+## Your task
+
+You are the orchestrator for {component}. You do NOT implement code directly —
+you read each message, decide what work it requires, and spawn the right specialist
+agents via the Dispatcher MCP. Follow your component persona above.
+
+### Step 1 — Read Farga context
+
+Call mcp__farga__read_context (project: "{project}") to orient yourself.
+Call mcp__farga__search_signals (project: "{project}") to see recent activity.
+
+### Step 2 — Process each message
+
+**For issue messages** (GitHub issues synced from the repo):
+- Issue data includes: number, title, body, labels, url
+- Skip if already tracked in recent Farga signals (check source="component-agent").
+- Assess: is the issue scoped to this component alone? Is it clear and actionable?
+  - Code change → invoke `{component}/developer` via mcp__dispatcher__invoke_agent
+  - Tests needed → invoke `{component}/qa`
+  - Documentation drift → invoke `{component}/librarian`
+  - Review needed before merge → invoke `{component}/reviewer`
+  - Multiple concerns → spawn in sequence, not in parallel
+  - Ambiguous scope or cross-component → escalate (see below)
+
+**For dispatch messages** (tasks published by Guilhem):
+- The payload includes: task, context, outcome, class, review_required
+- Class 1: dispatch autonomously to the appropriate specialist agent.
+- Class 2: dispatch, then write a Farga signal source="component-class2-ready" so Guilhem
+  can review before the resulting PR is merged.
+
+### Escalation threshold
+
+Escalate to Guilhem (write Farga signal source="component-escalation") when:
+- Work touches interfaces other components depend on
+- Confidence is below 70%
+- The issue implies architectural change
+
+For routine, well-scoped work within the component's domain: act autonomously.
+
+### Step 3 — Record results
+
+Write a summary signal to Farga:
+- source: "component-agent"
+- content: "Processed N messages. Dispatched: <list>. Skipped: <reasons>. Escalated: <list>."
+
+Your written response IS the summary — it is recorded to Farga automatically.
+"###,
+        persona_context = persona_context,
+        component = component,
+        project = project,
+        payload = payload,
+    )
 }
 
 // ── Handoff Bridge ──────────────────────────────────────────────────────────
