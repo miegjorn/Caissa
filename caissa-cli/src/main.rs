@@ -96,6 +96,36 @@ enum Commands {
         #[arg(long)]
         component: Option<String>,
     },
+    /// Fondament registry operations.
+    Fondament {
+        #[command(subcommand)]
+        action: FondamentAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum FondamentAction {
+    /// Publish definition(s) to the Fondament registry (MinIO/S3).
+    Publish {
+        /// Path to a single definition YAML file (mutually exclusive with --all).
+        #[arg(long)]
+        file: Option<String>,
+        /// Publish all definitions in the definitions directory.
+        #[arg(long)]
+        all: bool,
+        /// Path to the definitions directory (default: ./definitions).
+        #[arg(long, default_value = "definitions")]
+        definitions_dir: String,
+        /// Registry URL.
+        #[arg(long, default_value = "http://minio.occitan-system.svc.cluster.local:9000")]
+        registry_url: String,
+        /// Bucket name.
+        #[arg(long, default_value = "fondament-registry")]
+        bucket: String,
+        /// Overwrite existing published versions.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[tokio::main]
@@ -127,5 +157,25 @@ async fn main() -> anyhow::Result<()> {
         Commands::Ingest { component } => {
             commands::ingest::run(component.as_deref()).await
         }
+        Commands::Fondament { action } => match action {
+            FondamentAction::Publish {
+                file,
+                all,
+                definitions_dir,
+                registry_url,
+                bucket,
+                force,
+            } => {
+                commands::fondament::publish(
+                    file.as_deref(),
+                    all,
+                    &definitions_dir,
+                    &registry_url,
+                    &bucket,
+                    force,
+                )
+                .await
+            }
+        },
     }
 }
