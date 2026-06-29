@@ -46,13 +46,14 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.MIEGJORN_CI_TOKEN }}
+
+      - name: Configure git credentials
+        run: |
+          git config --global url."https://x-access-token:${{ secrets.MIEGJORN_CI_TOKEN }}@github.com/".insteadOf "https://github.com/"
+          git remote set-url origin "https://x-access-token:${{ secrets.MIEGJORN_CI_TOKEN }}@github.com/miegjorn/Caissa.git"
 
       - name: Clone Fondament
-        run: gh repo clone miegjorn/Fondament Fondament
-        env:
-          GH_TOKEN: ${{ secrets.MIEGJORN_CI_TOKEN }}
+        run: git clone https://github.com/miegjorn/Fondament Fondament
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
 
