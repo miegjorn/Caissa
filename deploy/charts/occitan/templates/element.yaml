@@ -21,7 +21,10 @@ data:
       "integrations_rest_url": null,
       "integrations_widgets_urls": [],
       "bug_report_endpoint_url": null,
-      "show_labs_settings": true
+      "show_labs_settings": true,
+      "features": {
+        "feature_mermaid": true
+      }
     }
 ---
 apiVersion: apps/v1
