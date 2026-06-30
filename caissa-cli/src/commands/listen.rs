@@ -2091,12 +2091,17 @@ fn parse_nervi_messages(resp: &serde_json::Value) -> Vec<serde_json::Value> {
 }
 
 fn component_mcp_servers(state: &ListenState) -> serde_json::Value {
-    // Component agents have no Charradissa (they don't live in Matrix rooms).
-    serde_json::json!({
+    let mut servers = serde_json::json!({
         "farga":      { "type": "http", "url": state.farga_mcp_url },
         "dispatcher": { "type": "http", "url": state.dispatcher_mcp_url },
         "nervi":      { "type": "http", "url": state.nervi_mcp_url },
-    })
+    });
+    // Wire Charradissa when configured — component agents that live in Matrix rooms
+    // (e.g. nervi-agent) need matrix_request_approval and matrix_send.
+    if !state.charradissa_mcp_url.is_empty() {
+        servers["charradissa"] = serde_json::json!({ "type": "http", "url": state.charradissa_mcp_url });
+    }
+    servers
 }
 
 fn component_allowed_tools(fondament_path: &str, component: &str) -> Vec<String> {
@@ -2121,6 +2126,8 @@ fn component_allowed_tools(fondament_path: &str, component: &str) -> Vec<String>
         "mcp__dispatcher__invoke_agent".to_string(),
         "mcp__dispatcher__get_agent_result".to_string(),
         "mcp__dispatcher__list_agent_specs".to_string(),
+        "mcp__charradissa__matrix_send".to_string(),
+        "mcp__charradissa__matrix_request_approval".to_string(),
         "mcp__nervi__nervi_publish".to_string(),
         "mcp__nervi__nervi_subscribe".to_string(),
     ]
