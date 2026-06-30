@@ -118,8 +118,6 @@ struct SkillInvokeAgentRules {
     allowed_facets: Option<Vec<String>>,
     #[serde(default)]
     domain_must_match_caller: bool,
-    #[serde(default)]
-    allowed_stances: Option<Vec<String>>,
 }
 #[derive(serde::Deserialize, Default)]
 struct SkillDispatcherRules {
