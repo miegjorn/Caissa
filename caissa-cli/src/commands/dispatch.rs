@@ -24,61 +24,85 @@ use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 struct ScopeRule {
-    /// The caller identity this rule applies to ("guilhem", etc.).
+    /// The caller component this rule applies to ("guilhem", etc.).
     /// "*" means applies to any caller not matched by a more specific rule.
     caller_identity: String,
     /// If set, the facet must be one of these values.
     allowed_facets: Option<Vec<String>>,
-    /// If true, domain must equal caller.
+    /// If true, domain must equal caller component.
     domain_must_match_caller: bool,
 }
 
 #[derive(Clone, Debug, Default)]
 struct ScopeRules(Vec<ScopeRule>);
 
+/// Stances that carry no dispatch authority. Agents in these postures evaluate
+/// or advise — they do not build teams or spawn parallel workers.
+const NO_DISPATCH_STANCES: &[&str] = &[
+    "advisor", "reviewer", "challenger", "investigator", "facilitator",
+];
+
+/// Parse caller field — format is "{component}" (legacy) or "{component}/{facet}/{stance}".
+/// Returns (component, stance).
+fn parse_caller(caller: &str) -> (&str, Option<&str>) {
+    let mut parts = caller.splitn(3, '/');
+    let component = parts.next().unwrap_or(caller);
+    let _facet = parts.next();
+    let stance = parts.next();
+    (component, stance)
+}
+
 impl ScopeRules {
     fn validate(&self, caller: &str, domain: &str, facet: &str) -> anyhow::Result<()> {
-        // Look for a rule matching this specific caller
-        let matched = self.0.iter().find(|r| r.caller_identity == caller);
+        let (component, stance) = parse_caller(caller);
+
+        // Stance gate: advisory/evaluation stances carry no dispatch authority.
+        if let Some(s) = stance {
+            anyhow::ensure!(
+                !NO_DISPATCH_STANCES.contains(&s),
+                "scope violation: stance '{}' carries no dispatch authority; \
+                 agents in advisory or evaluation stances do not build teams. \
+                 Only coordinator/contributor stances may invoke agents.",
+                s
+            );
+        }
+
+        // Look for a rule matching this specific caller component
+        let matched = self.0.iter().find(|r| r.caller_identity == component);
         // Fallback wildcard rule
         let wildcard = self.0.iter().find(|r| r.caller_identity == "*");
-
         let rule = matched.or(wildcard);
 
         if let Some(r) = rule {
             if let Some(allowed) = &r.allowed_facets {
                 anyhow::ensure!(
                     allowed.iter().any(|f| f == facet),
-                    "scope violation: {} may only invoke facet {:?} (got '{}'); \
+                    "scope violation: {} may only invoke facets {:?} (got '{}'); \
                      route component work via nervi_publish instead",
-                    caller, allowed, facet
+                    component, allowed, facet
                 );
             }
-            if r.domain_must_match_caller {
+            // contributor stance always restricts to own domain regardless of the rule
+            let must_match = r.domain_must_match_caller || stance == Some("contributor");
+            if must_match {
                 anyhow::ensure!(
-                    domain == caller,
+                    domain == component,
                     "scope violation: {} may only invoke agents in its own domain (got domain='{}'); \
                      pass the puck back to Guilhem via nervi_publish if cross-component coordination is needed",
-                    caller, domain
+                    component, domain
                 );
             }
         } else {
-            // No rule found — apply safe defaults
-            if caller == "guilhem" {
+            // No rule loaded — hardcoded safe defaults
+            if component != "guilhem" {
                 anyhow::ensure!(
-                    facet == "architect",
-                    "scope violation: guilhem may only invoke facet=architect (got '{}'); \
-                     route component work via nervi_publish instead",
-                    facet
-                );
-            } else {
-                anyhow::ensure!(
-                    domain == caller,
+                    domain == component,
                     "scope violation: {} may only invoke agents in its own domain (got domain='{}'); \
                      pass the puck back to Guilhem via nervi_publish if cross-component coordination is needed",
-                    caller, domain
+                    component, domain
                 );
             }
+            // guilhem with no loaded rules: no facet/domain restrictions (fail-open for org orchestrator)
         }
         Ok(())
     }
@@ -94,6 +118,8 @@ struct SkillInvokeAgentRules {
     allowed_facets: Option<Vec<String>>,
     #[serde(default)]
     domain_must_match_caller: bool,
+    #[serde(default)]
+    allowed_stances: Option<Vec<String>>,
 }
 #[derive(serde::Deserialize, Default)]
 struct SkillDispatcherRules {
@@ -177,7 +203,7 @@ fn tool_list() -> Value {
                         },
                         "facet": {
                             "type": "string",
-                            "description": "Role facet: architect | cloud-architect | aws-architect | azure-architect | gcp-architect | developer | qa | infra | db | security | reviewer | analyst | writer | librarian"
+                            "description": "Role facet: architect | cloud-architect | aws-architect | azure-architect | gcp-architect | intake-architect | developer | qa | infra | db | security | reviewer | analyst | writer | librarian | axiom-evaluator | tech-moderator | project-moderator | meditation-moderator | review-moderator"
                         },
                         "task": {
                             "type": "string",
@@ -185,7 +211,7 @@ fn tool_list() -> Value {
                         },
                         "context": {
                             "type": "string",
-                            "description": "Pre-assembled domain+facet context markdown. Written to /workspace/CLAUDE.md before the agent runs. Load from /fondament/domains/<domain>.yaml for domain context. For facet context, the filename does NOT match the facet keyword — use this mapping: architect->app-architect.yaml, cloud-architect->cloud-architect.yaml, aws-architect->aws-architect.yaml, azure-architect->azure-architect.yaml, gcp-architect->gcp-architect.yaml, developer->developer.yaml, infra->infra-engineer.yaml, qa->qa-engineer.yaml, security->security-analyst.yaml, db->data-architect.yaml, reviewer->code-reviewer.yaml, analyst->business-analyst.yaml, writer->technical-writer.yaml, librarian->librarian.yaml. Read /fondament/roles/<mapped-filename> in your session."
+                            "description": "Pre-assembled domain+facet context markdown. Written to /workspace/CLAUDE.md before the agent runs. Load from /fondament/domains/<domain>.yaml for domain context. For facet context, the filename does NOT match the facet keyword — use this mapping: architect->app-architect.yaml, cloud-architect->cloud-architect.yaml, aws-architect->aws-architect.yaml, azure-architect->azure-architect.yaml, gcp-architect->gcp-architect.yaml, intake-architect->intake-architect.yaml, developer->developer.yaml, infra->infra-engineer.yaml, qa->qa-engineer.yaml, security->security-analyst.yaml, db->data-architect.yaml, reviewer->code-reviewer.yaml, analyst->business-analyst.yaml, writer->technical-writer.yaml, librarian->librarian.yaml, axiom-evaluator->axiom-evaluator.yaml, tech-moderator->tech-moderator.yaml, project-moderator->project-moderator.yaml, meditation-moderator->meditation-moderator.yaml, review-moderator->review-moderator.yaml. Read /fondament/roles/<mapped-filename> in your session."
                         },
                         "allowed_tools": {
                             "type": "string",
@@ -197,7 +223,7 @@ fn tool_list() -> Value {
                         },
                         "caller": {
                             "type": "string",
-                            "description": "Identity of the calling agent. REQUIRED. Use 'guilhem' for the org agent; use the component name (e.g. 'farga', 'gardian') for component agents. Scope rules: guilhem may invoke any facet; a component agent may only invoke its own domain."
+                            "description": "Caller identity. REQUIRED. Format: '{component}/{facet}/{stance}' (e.g. 'nervi/app-architect/coordinator') or legacy '{component}' (e.g. 'guilhem', 'nervi'). Stance determines dispatch authority: coordinator and contributor may dispatch; advisor, reviewer, challenger, investigator, and facilitator may not. contributor stance restricts dispatch to own domain. coordinator stance allows cross-domain architecture facets."
                         }
                     },
                     "required": ["domain", "facet", "task", "session_id", "caller"]
@@ -673,8 +699,19 @@ async fn fetch_signals(farga_url: &str, project: &str) -> anyhow::Result<String>
 // ── Agent spec catalog ────────────────────────────────────────────────────────
 
 fn list_specs() -> String {
-    let domains = ["occitan", "farga", "gardian", "amassada", "charradissa", "cor", "caissa", "fondament"];
-    let facets = ["architect", "developer", "qa", "infra", "db", "security"];
+    let domains = ["occitan", "farga", "gardian", "amassada", "charradissa", "cor", "caissa", "fondament", "nervi"];
+    let facets = [
+        // architects
+        "architect", "cloud-architect", "aws-architect", "azure-architect", "gcp-architect", "intake-architect",
+        // implementation
+        "developer", "qa", "infra", "db", "security",
+        // review / evaluation
+        "reviewer", "axiom-evaluator",
+        // knowledge / docs
+        "analyst", "writer", "librarian",
+        // moderators
+        "tech-moderator", "project-moderator", "meditation-moderator", "review-moderator",
+    ];
 
     let mut lines = vec!["Available domain/facet combinations:\n".to_string()];
     for domain in domains {
@@ -682,7 +719,26 @@ fn list_specs() -> String {
             lines.push(format!("  {}/{}", domain, facet));
         }
     }
-    lines.push("\nLoad domain context from /fondament/domains/<domain>.yaml.\nFacet filenames under /fondament/roles/ do not match the facet keyword above —\nuse this mapping: developer->developer.yaml, infra->infra-engineer.yaml,\nqa->qa-engineer.yaml, security->security-analyst.yaml, architect->app-architect.yaml,\ndb->data-architect.yaml. Read the facet file's tools.always_on list and pass it\nas invoke_agent's allowed_tools (comma-separated tool names).".into());
+    lines.push(
+        "\nFacet keyword → Fondament role file mapping:\n\
+         architect->app-architect.yaml, cloud-architect->cloud-architect.yaml,\n\
+         aws-architect->aws-architect.yaml, azure-architect->azure-architect.yaml,\n\
+         gcp-architect->gcp-architect.yaml, intake-architect->intake-architect.yaml,\n\
+         developer->developer.yaml, qa->qa-engineer.yaml, infra->infra-engineer.yaml,\n\
+         db->data-architect.yaml, security->security-analyst.yaml,\n\
+         reviewer->code-reviewer.yaml, axiom-evaluator->axiom-evaluator.yaml,\n\
+         analyst->business-analyst.yaml, writer->technical-writer.yaml, librarian->librarian.yaml,\n\
+         tech-moderator->tech-moderator.yaml, project-moderator->project-moderator.yaml,\n\
+         meditation-moderator->meditation-moderator.yaml, review-moderator->review-moderator.yaml.\n\
+         \n\
+         Load domain context from /fondament/domains/<domain>.yaml.\n\
+         Read the facet file's tools.always_on list and pass it as invoke_agent's\n\
+         allowed_tools (comma-separated MCP tool names: mcp__<server>__<tool>).\n\
+         \n\
+         Caller format: '{component}/{facet}/{stance}' or legacy '{component}'.\n\
+         Stances with dispatch authority: coordinator, contributor.\n\
+         Stances without dispatch authority: advisor, reviewer, challenger, investigator, facilitator.".into()
+    );
     lines.join("\n")
 }
 
