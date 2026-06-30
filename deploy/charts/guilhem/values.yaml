@@ -1,7 +1,7 @@
 # Guilhem agent chart values.
 # Image is built by: caissa build guilhem
 
-image: ghcr.io/miegjorn/caissa-sandbox:guilhem-sha-8146ee8
+image: ghcr.io/miegjorn/caissa-sandbox:guilhem-sha-72be8a9
 generation: guilhem
 # Lean CLI image for sidecars that only need the caissa binary (no agent sandbox).
 # CI keeps this current with every push to Caissa main.
