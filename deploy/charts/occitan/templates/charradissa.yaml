@@ -105,6 +105,10 @@ spec:
               value: "http://farga:{{ .Values.farga.port }}"
             - name: APPROVAL_ROOM_ID
               value: {{ .Values.charradissa.approvalRoomId | default "" | quote }}
+            {{- if .Values.kroki.enabled }}
+            - name: KROKI_URL
+              value: "http://kroki:{{ .Values.kroki.port }}"
+            {{- end }}
           volumeMounts:
             - name: config
               mountPath: /config

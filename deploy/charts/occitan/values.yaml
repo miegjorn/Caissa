@@ -137,6 +137,11 @@ synapse:
   # Registration is open by default for local dev. Disable in production:
   enableRegistration: true
   reportStats: false
+# ─── Kroki (server-side diagram rendering) ────────────────────────────────────
+kroki:
+  enabled: true
+  image: yuzutech/kroki:latest
+  port: 8000
 # ─── PostgreSQL (Synapse database) ───────────────────────────────────────────
 # In-chart StatefulSet using the official postgres image (templates/postgresql.yaml).
 postgresql:

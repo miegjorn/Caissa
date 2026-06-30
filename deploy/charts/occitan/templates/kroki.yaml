@@ -1,0 +1,53 @@
+{{- if .Values.kroki.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kroki
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+    {{- include "occitan.selectorLabels" (dict "component" "kroki" "context" .) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "occitan.selectorLabels" (dict "component" "kroki" "context" .) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "occitan.selectorLabels" (dict "component" "kroki" "context" .) | nindent 8 }}
+    spec:
+      containers:
+        - name: kroki
+          image: {{ .Values.kroki.image }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: {{ .Values.kroki.port }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.kroki.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kroki
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "occitan.selectorLabels" (dict "component" "kroki" "context" .) | nindent 4 }}
+  ports:
+    - port: {{ .Values.kroki.port }}
+      targetPort: {{ .Values.kroki.port }}
+      name: http
+{{- end }}
