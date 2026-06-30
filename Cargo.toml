@@ -24,3 +24,4 @@ k8s-openapi = { version = "0.22", features = ["v1_30"] }
 aws-sdk-s3 = { version = "1", features = [] }
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-credential-types = { version = "1" }
+rustls = { version = "0.23", features = ["ring"] }

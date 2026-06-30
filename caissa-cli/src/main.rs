@@ -130,6 +130,8 @@ enum FondamentAction {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // rustls 0.23+ requires an explicit crypto provider; install ring as the default.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     tracing_subscriber::fmt::init();
     let cli = Cli::parse();
     let cfg = caissa_core::config::load_config().unwrap_or_default();

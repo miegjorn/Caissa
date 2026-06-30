@@ -26,3 +26,4 @@ serde_yaml = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 aws-config = { workspace = true }
 aws-credential-types = { workspace = true }
+rustls = { workspace = true }
