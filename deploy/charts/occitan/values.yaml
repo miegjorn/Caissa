@@ -68,7 +68,7 @@ amassada:
 # ─── Charradissa ─────────────────────────────────────────────────────────────
 charradissa:
   image: ghcr.io/miegjorn/charradissa
-  imageTag: sha-09bf082 # CI writes sha-<sha> here on every main push
+  imageTag: sha-8550220 # CI writes sha-<sha> here on every main push
   replicas: 1
   port: 8448
   # Matrix room ID for the shared code-approval room. Agents call matrix_request_approval
