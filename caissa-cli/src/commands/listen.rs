@@ -2043,6 +2043,8 @@ async fn poll_nervi_subject(state: &ListenState, subject: &str, max_messages: u3
     if state.nervi_mcp_url.is_empty() {
         return Ok(vec![]);
     }
+    // Derive a stable consumer name from the subject (durable — survives across polls).
+    let consumer_name = subject.replace('.', "-");
     let client = reqwest::Client::new();
     let body = serde_json::json!({
         "jsonrpc": "2.0",
@@ -2052,19 +2054,27 @@ async fn poll_nervi_subject(state: &ListenState, subject: &str, max_messages: u3
             "name": "nervi_subscribe",
             "arguments": {
                 "subject": subject,
-                "max_messages": max_messages,
-                "timeout_ms": 5000
+                "consumer_name": consumer_name,
+                "max_messages": max_messages
             }
         }
     });
     let resp = client
         .post(&state.nervi_mcp_url)
+        // nervi-mcp TypeScript server requires SSE-capable Accept header.
+        .header("Accept", "application/json, text/event-stream")
         .json(&body)
         .timeout(std::time::Duration::from_secs(15))
         .send()
         .await?
-        .json::<serde_json::Value>()
+        .text()
         .await?;
+    // SSE frames each response as "event: message\ndata: {...}\n\n"; unwrap the data line.
+    let json_str = resp.lines()
+        .find(|l| l.starts_with("data: "))
+        .map(|l| &l["data: ".len()..])
+        .unwrap_or(&resp);
+    let resp: serde_json::Value = serde_json::from_str(json_str).unwrap_or(serde_json::Value::Null);
     Ok(parse_nervi_messages(&resp))
 }
 
