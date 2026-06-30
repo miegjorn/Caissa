@@ -16,11 +16,11 @@
 #   3. Set homeserver to http://occitane.guilhem:8008
 #      (or http://localhost:8008 if /etc/hosts isn't set up yet)
 #   4. Log in as pierre-luc.
-#   5. Open the DM with @charradissa:occitane.guilhem — that's Guilhem.
+#   5. Open the DM with @guilhem:occitane.guilhem — that's Guilhem.
 #      Send any plain text message; he replies.
 #
-# Note: @claude:occitane.guilhem is a regular user account, NOT the bot.
-#       @charradissa:occitane.guilhem is the Guilhem agent.
+# Note: @charradissa:occitane.guilhem is the background substrate bot (not Guilhem).
+#       @claude-session:occitane.guilhem is the Claude Code session identity.
 set -euo pipefail
 
 NS=occitan-system
@@ -44,6 +44,6 @@ echo "  Synapse (homeserver) → http://localhost:8008"
 echo "  Element Web (UI)     → http://localhost:8080"
 echo ""
 echo "Open http://localhost:8080 and set homeserver to http://occitane.guilhem:8008"
-echo "Log in as pierre-luc. DM @charradissa:occitane.guilhem to talk to Guilhem."
+echo "Log in as pierre-luc. DM @guilhem:occitane.guilhem to talk to Guilhem."
 
 wait
