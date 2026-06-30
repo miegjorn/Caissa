@@ -80,8 +80,10 @@ jobs:
           SHA=$(echo "${{ github.sha }}" | head -c7)
           sed -i "s|image: ghcr.io/miegjorn/caissa-sandbox:guilhem-sha-.*|image: ghcr.io/miegjorn/caissa-sandbox:guilhem-sha-$SHA|" \
             deploy/charts/guilhem/values.yaml
+          sed -i "s|image: ghcr.io/miegjorn/caissa-sandbox:guilhem-sha-.*|image: ghcr.io/miegjorn/caissa-sandbox:guilhem-sha-$SHA|" \
+            deploy/charts/component-agents/values.yaml
           git config user.name "caissa-ci"
           git config user.email "ci@miegjorn.dev"
-          git add deploy/charts/guilhem/values.yaml
+          git add deploy/charts/guilhem/values.yaml deploy/charts/component-agents/values.yaml
           git diff --staged --quiet || git commit -m "chore(ci): update guilhem image to sha-$SHA [skip ci]"
           git push
