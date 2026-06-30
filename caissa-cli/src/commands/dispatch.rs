@@ -177,7 +177,7 @@ fn tool_list() -> Value {
                         },
                         "facet": {
                             "type": "string",
-                            "description": "Role facet: architect | developer | qa | infra | db | security"
+                            "description": "Role facet: architect | cloud-architect | aws-architect | azure-architect | gcp-architect | developer | qa | infra | db | security | reviewer | analyst | writer | librarian"
                         },
                         "task": {
                             "type": "string",
@@ -185,7 +185,7 @@ fn tool_list() -> Value {
                         },
                         "context": {
                             "type": "string",
-                            "description": "Pre-assembled domain+facet context markdown. Written to /workspace/CLAUDE.md before the agent runs. Load from /fondament/domains/<domain>.yaml for domain context. For facet context, the filename does NOT match the facet keyword — use this mapping: developer->developer.yaml, infra->infra-engineer.yaml, qa->qa-engineer.yaml, security->security-analyst.yaml, architect->app-architect.yaml, db->data-architect.yaml. Read /fondament/roles/<mapped-filename> in your session."
+                            "description": "Pre-assembled domain+facet context markdown. Written to /workspace/CLAUDE.md before the agent runs. Load from /fondament/domains/<domain>.yaml for domain context. For facet context, the filename does NOT match the facet keyword — use this mapping: architect->app-architect.yaml, cloud-architect->cloud-architect.yaml, aws-architect->aws-architect.yaml, azure-architect->azure-architect.yaml, gcp-architect->gcp-architect.yaml, developer->developer.yaml, infra->infra-engineer.yaml, qa->qa-engineer.yaml, security->security-analyst.yaml, db->data-architect.yaml, reviewer->code-reviewer.yaml, analyst->business-analyst.yaml, writer->technical-writer.yaml, librarian->librarian.yaml. Read /fondament/roles/<mapped-filename> in your session."
                         },
                         "allowed_tools": {
                             "type": "string",
@@ -197,7 +197,7 @@ fn tool_list() -> Value {
                         },
                         "caller": {
                             "type": "string",
-                            "description": "Identity of the calling agent. REQUIRED. Use 'guilhem' for the org agent; use the component name (e.g. 'farga', 'gardian') for component agents. Scope rules: guilhem may only invoke facet=architect; a component agent may only invoke its own domain."
+                            "description": "Identity of the calling agent. REQUIRED. Use 'guilhem' for the org agent; use the component name (e.g. 'farga', 'gardian') for component agents. Scope rules: guilhem may invoke any facet; a component agent may only invoke its own domain."
                         }
                     },
                     "required": ["domain", "facet", "task", "session_id", "caller"]
