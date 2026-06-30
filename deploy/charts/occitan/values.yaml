@@ -141,6 +141,7 @@ synapse:
 kroki:
   enabled: true
   image: yuzutech/kroki:latest
+  mermaidImage: yuzutech/kroki-mermaid:latest
   port: 8000
 # ─── PostgreSQL (Synapse database) ───────────────────────────────────────────
 # In-chart StatefulSet using the official postgres image (templates/postgresql.yaml).

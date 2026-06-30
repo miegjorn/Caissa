@@ -21,6 +21,10 @@ spec:
         - name: kroki
           image: {{ .Values.kroki.image }}
           imagePullPolicy: IfNotPresent
+          env:
+            # Tell the Kroki gateway where its Mermaid companion is (sidecar on localhost).
+            - name: KROKI_MERMAID_HOST
+              value: "127.0.0.1"
           ports:
             - containerPort: {{ .Values.kroki.port }}
           readinessProbe:
@@ -29,6 +33,17 @@ spec:
               port: {{ .Values.kroki.port }}
             initialDelaySeconds: 5
             periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+        - name: kroki-mermaid
+          image: {{ .Values.kroki.mermaidImage }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8002
           resources:
             requests:
               cpu: 100m
