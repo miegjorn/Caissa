@@ -88,6 +88,12 @@ enum Commands {
     /// Writes a bug-signal to Farga on any anomaly.
     /// Runs as a sidecar in the Guilhem pod (independent of the main process).
     Watch,
+    /// GitHub → NATS polling bridge (Occitan#36).
+    /// Polls GitHub API for new/updated issues on tracked miegjorn/* repos
+    /// and publishes them to occitan.github.issues.<component> NATS subjects.
+    /// Runs as a sidecar in the Guilhem pod alongside the SRE watchdog.
+    /// Configure via GITHUB_TOKEN, GITHUB_POLL_REPOS, GITHUB_POLL_INTERVAL_SECS env vars.
+    Sync,
     /// Seed Farga's role-scoped context graph from GitHub repos.
     /// Fetches CLAUDE.md and README, synthesizes architecture via Claude,
     /// and writes typed context nodes: [component][codebase] and [component][architecture].
@@ -156,6 +162,7 @@ async fn main() -> anyhow::Result<()> {
             commands::report::run(&url, &proj).await
         }
         Commands::Watch => commands::watch::run().await,
+        Commands::Sync => commands::sync::run().await,
         Commands::Ingest { component } => {
             commands::ingest::run(component.as_deref()).await
         }

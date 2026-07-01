@@ -62,6 +62,14 @@ pub struct CaissaConfig {
     /// (not yet implemented — field is reserved, check is currently skipped).
     #[serde(default = "default_sre_chronicle_max_age_hours")]
     pub sre_chronicle_max_age_hours: u64,
+    /// GitHub → NATS bridge: repos to watch (owner/repo format).
+    /// Defaults to all miegjorn/* component repos. Override via GITHUB_POLL_REPOS env var.
+    #[serde(default)]
+    pub github_poll_repos: Vec<String>,
+    /// GitHub → NATS bridge: poll interval in seconds (default: 300).
+    /// Override via GITHUB_POLL_INTERVAL_SECS env var.
+    #[serde(default = "default_github_poll_interval_secs")]
+    pub github_poll_interval_secs: u64,
 }
 
 fn default_fondament_path() -> String {
@@ -89,7 +97,7 @@ fn default_nervi_mcp_url() -> String {
 }
 
 fn default_chronicle_model() -> String {
-    "claude-haiku-4-5-20251001".into()
+    "claude-haiku-4-5".into()
 }
 
 fn default_matrix_model() -> String {
@@ -101,10 +109,11 @@ fn default_dream_model() -> String {
 }
 
 fn default_amassada_url() -> String {
-    "http://amassada.occitan-system.svc.cluster.local:7700".into()
+    "http://amassada.occitan-system.svc.cluster.local:7600".into()
 }
 
 fn default_sre_health_timeout_secs() -> u64 { 10 }
+fn default_github_poll_interval_secs() -> u64 { 300 }
 fn default_sre_watchdog_interval_secs() -> u64 { 300 }
 fn default_sre_chronicle_max_age_hours() -> u64 { 7 }
 
@@ -129,6 +138,8 @@ impl Default for CaissaConfig {
             sre_health_timeout_secs: default_sre_health_timeout_secs(),
             sre_watchdog_interval_secs: default_sre_watchdog_interval_secs(),
             sre_chronicle_max_age_hours: default_sre_chronicle_max_age_hours(),
+            github_poll_repos: vec![],
+            github_poll_interval_secs: default_github_poll_interval_secs(),
         }
     }
 }
