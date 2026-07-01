@@ -35,6 +35,48 @@
 #   anything else           → OPENAI_API_BASE required, key: OPENAI_API_KEY
 MODEL="${MODEL:-claude}"
 
+# Mints a short-lived (1h) GitHub App installation token from the App
+# credentials fetch-tokens wrote to /creds/, and (re)writes GH_TOKEN /
+# GITHUB_TOKEN into /creds/tokens.env. Safe to call repeatedly — each call
+# fully overwrites those two lines, preserving GITLAB_*/SYNAPSE_* lines.
+mint_installation_token() {
+  APP_ID=$(cat /creds/github-app-id)
+  INSTALLATION_ID=$(cat /creds/github-app-installation-id)
+  PRIVATE_KEY_FILE=/creds/github-app-private-key.pem
+
+  NOW=$(date +%s)
+  IAT=$((NOW - 60))
+  EXP=$((NOW + 540))
+
+  JWT_HEADER=$(printf '{"alg":"RS256","typ":"JWT"}' | openssl base64 -A | tr '+/' '-_' | tr -d '=')
+  JWT_PAYLOAD=$(printf '{"iat":%s,"exp":%s,"iss":"%s"}' "$IAT" "$EXP" "$APP_ID" | openssl base64 -A | tr '+/' '-_' | tr -d '=')
+  JWT_UNSIGNED="${JWT_HEADER}.${JWT_PAYLOAD}"
+  JWT_SIGNATURE=$(printf '%s' "$JWT_UNSIGNED" | openssl dgst -sha256 -sign "$PRIVATE_KEY_FILE" -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')
+  JWT="${JWT_UNSIGNED}.${JWT_SIGNATURE}"
+
+  INSTALL_TOKEN=$(curl -sf -X POST \
+    -H "Authorization: Bearer ${JWT}" \
+    -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" \
+    | python3 -c 'import sys, json; print(json.load(sys.stdin).get("token", ""))')
+
+  if [ -z "$INSTALL_TOKEN" ]; then
+    echo "[entrypoint] failed to mint GitHub App installation token" >&2
+    return 1
+  fi
+
+  grep -v '^export GH_TOKEN=\|^export GITHUB_TOKEN=' /creds/tokens.env > /creds/tokens.env.tmp 2>/dev/null || true
+  {
+    cat /creds/tokens.env.tmp 2>/dev/null
+    echo "export GH_TOKEN='${INSTALL_TOKEN}'"
+    echo "export GITHUB_TOKEN='${INSTALL_TOKEN}'"
+  } > /creds/tokens.env
+  rm -f /creds/tokens.env.tmp
+
+  export GH_TOKEN="$INSTALL_TOKEN"
+  export GITHUB_TOKEN="$INSTALL_TOKEN"
+}
+
 set -e
 
 FARGA_MCP_URL="${FARGA_MCP_URL:-http://farga.occitan-system.svc.cluster.local:7500/mcp}"
@@ -84,6 +126,7 @@ if [ -n "${TASK:-}" ]; then
   # container ran (it always does for dispatched agent Jobs — see
   # build_job in caissa-cli/src/commands/dispatch.rs).
   [ -f /creds/tokens.env ] && . /creds/tokens.env
+  [ -f /creds/github-app-id ] && mint_installation_token
   export GIT_CONFIG_GLOBAL=/creds/.gitconfig
 
   # Run the task non-interactively, capture output. --mcp-config connects
@@ -178,5 +221,16 @@ PYEOF
 
 else
   # ── Interactive mode ───────────────────────────────────────────────────────
+  [ -f /creds/tokens.env ] && . /creds/tokens.env
+  if [ -f /creds/github-app-id ]; then
+    mint_installation_token
+    # Refresh every 45 minutes (installation tokens expire after 1h). This
+    # rewrites /creds/tokens.env; BASH_ENV below makes each freshly-spawned
+    # bash subshell (i.e. every Bash tool call claude makes) re-read it, so
+    # long sessions don't run on a stale token past the 1h mark.
+    (while true; do sleep 2700; mint_installation_token; done) &
+    export BASH_ENV=/creds/tokens.env
+  fi
+  export GIT_CONFIG_GLOBAL=/creds/.gitconfig
   exec claude "$@"
 fi
