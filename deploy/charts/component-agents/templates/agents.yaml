@@ -64,12 +64,12 @@ spec:
             - |
               set -eu
               export BAO_ADDR=http://openbao.occitan-system.svc.cluster.local:8200
-              GH=$(bao kv get -field=value secret/occitan/github)
               GL=$(bao kv get -field=value secret/occitan/gitlab)
               umask 077
+              bao kv get -field=value secret/occitan/github-app-id > /creds/github-app-id
+              bao kv get -field=value secret/occitan/github-app-installation-id > /creds/github-app-installation-id
+              bao kv get -field=value secret/occitan/github-app-private-key > /creds/github-app-private-key.pem
               cat > /creds/tokens.env <<EOF
-              export GH_TOKEN='$GH'
-              export GITHUB_TOKEN='$GH'
               export GITLAB_TOKEN='$GL'
               export GITLAB_PAT_TOKEN='$GL'
               EOF
@@ -175,12 +175,10 @@ spec:
                 - |
                   set -eu
                   export BAO_ADDR=http://openbao.occitan-system.svc.cluster.local:8200
-                  GH=$(bao kv get -field=value secret/occitan/github)
                   umask 077
-                  cat > /creds/tokens.env <<EOF
-                  export GH_TOKEN='$GH'
-                  export GITHUB_TOKEN='$GH'
-                  EOF
+                  bao kv get -field=value secret/occitan/github-app-id > /creds/github-app-id
+                  bao kv get -field=value secret/occitan/github-app-installation-id > /creds/github-app-installation-id
+                  bao kv get -field=value secret/occitan/github-app-private-key > /creds/github-app-private-key.pem
                   echo "tokens written"
               env:
                 - name: BAO_TOKEN
@@ -341,10 +339,10 @@ spec:
                 - |
                   set -eu
                   export BAO_ADDR=http://openbao.occitan-system.svc.cluster.local:8200
-                  GH=$(bao kv get -field=value secret/occitan/github)
                   umask 077
-                  echo "export GH_TOKEN='$GH'" > /creds/tokens.env
-                  echo "export GITHUB_TOKEN='$GH'" >> /creds/tokens.env
+                  bao kv get -field=value secret/occitan/github-app-id > /creds/github-app-id
+                  bao kv get -field=value secret/occitan/github-app-installation-id > /creds/github-app-installation-id
+                  bao kv get -field=value secret/occitan/github-app-private-key > /creds/github-app-private-key.pem
               env:
                 - name: BAO_TOKEN
                   valueFrom:
