@@ -43,6 +43,16 @@ FARGA_URL="${FARGA_URL:-http://farga.occitan-system.svc.cluster.local:7500}"
 
 mkdir -p /root/.claude /workspace
 
+# Auto-approve all MCP tool calls — the container is already a trusted boundary.
+# File/bash tools still prompt in interactive mode; only MCP is bypassed.
+cat > /root/.claude/settings.json << 'EOF'
+{
+  "permissions": {
+    "allow": ["mcp__*"]
+  }
+}
+EOF
+
 # Always write the MCP config — both modes need it.
 cat > /root/.claude/claude_desktop_config.json << EOF
 {
