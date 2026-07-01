@@ -127,7 +127,10 @@ data:
     nervi_mcp_url = "http://nervi.occitan-system.svc.cluster.local:8080/mcp"
     # Haiku for routine chronicle runs — cheapest model, right for observation tasks.
     # Override: CHRONICLE_MODEL env or set chronicle_model here for a different model.
-    chronicle_model = "claude-haiku-4-5-20251001"
+    # A-8: cost-aware model selection — Haiku tier for observation/chronicle tasks.
+    # Stable alias (no date stamp) so the chart tracks the current Haiku 4.5 model
+    # head without requiring a chart bump on each model snapshot release.
+    chronicle_model = "claude-haiku-4-5"
     # Sonnet for dream runs — synthesis requires more capability than chronicle.
     dream_model = {{ .Values.dream.model | quote }}
 
