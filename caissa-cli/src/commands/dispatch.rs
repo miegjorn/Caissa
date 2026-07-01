@@ -305,6 +305,8 @@ async fn call_tool(state: &DispatchState, name: &str, args: &Value) -> anyhow::R
                 .unwrap_or("mcp__farga__search_signals,mcp__farga__read_context")
                 .to_string();
             let session_id = args["session_id"].as_str().unwrap_or("").to_string();
+            // model for complementary runs (claude* default, grok* for Grok-backed agents)
+            let model = args["model"].as_str().unwrap_or("claude-sonnet-4-6").to_string();
 
             anyhow::ensure!(!domain.is_empty(), "domain is required");
             anyhow::ensure!(!facet.is_empty(), "facet is required");
@@ -326,6 +328,7 @@ async fn call_tool(state: &DispatchState, name: &str, args: &Value) -> anyhow::R
                 &context,
                 &allowed_tools,
                 &session_id,
+                &model,
                 &state.agent_image,
                 &state.agents_namespace,
                 &state.farga_url,
@@ -369,6 +372,7 @@ async fn create_agent_job(
     context: &str,
     allowed_tools: &str,
     session_id: &str,
+    model: &str,
     image: &str,
     namespace: &str,
     farga_url: &str,
@@ -386,7 +390,8 @@ async fn create_agent_job(
         env_val("SESSION_ID", session_id),
         env_val("FARGA_URL", farga_url),
         env_val("FARGA_MCP_URL", farga_mcp_url),
-        // ANTHROPIC_API_KEY from the cluster secret
+        env_val("MODEL", model),
+        // ANTHROPIC_API_KEY from the cluster secret (for claude* models)
         EnvVar {
             name: "ANTHROPIC_API_KEY".into(),
             value_from: Some(EnvVarSource {
@@ -394,6 +399,19 @@ async fn create_agent_job(
                     name: Some("anthropic".into()),
                     key: "api-key".into(),
                     optional: Some(false),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        // XAI_API_KEY from the cluster secret (for grok* models, optional)
+        EnvVar {
+            name: "XAI_API_KEY".into(),
+            value_from: Some(EnvVarSource {
+                secret_key_ref: Some(SecretKeySelector {
+                    name: Some("xai".into()),
+                    key: "api-key".into(),
+                    optional: Some(true),
                 }),
                 ..Default::default()
             }),

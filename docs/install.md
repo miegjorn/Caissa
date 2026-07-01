@@ -20,6 +20,7 @@ The domain `occitane.guilhem` is the Matrix homeserver name. It is permanent —
 - macOS with [Homebrew](https://brew.sh) installed
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) running
 - An `ANTHROPIC_API_KEY` (Amassada and Charradissa need it)
+- (Optional) An `XAI_API_KEY` for Grok complementary support in dispatched agents / Guilhem tasks (when MODEL starts with "grok")
 
 ---
 
@@ -194,6 +195,13 @@ for ns in occitan-system agents; do
   kubectl create secret generic anthropic -n "$ns" \
     --from-literal=api-key="${ANTHROPIC_API_KEY}"
 done
+
+# xAI (Grok) API key — optional, for complementary Grok model support.
+# Create the k8s secret (and later seed to OpenBao).
+for ns in occitan-system agents; do
+  kubectl create secret generic xai -n "$ns" \
+    --from-literal=api-key="${XAI_API_KEY}" 2>/dev/null || true
+done
 ```
 
 OpenBao deploys automatically as part of the occitan chart (`templates/openbao.yaml`,
@@ -221,6 +229,7 @@ hard-coded token needed). Pipe the secret value over stdin:
 
 ```bash
 echo -n "$ANTHROPIC_API_KEY"  | scripts/seed-secret.sh occitan/anthropic
+echo -n "$XAI_API_KEY"        | scripts/seed-secret.sh occitan/xai
 echo -n "$GITHUB_TOKEN"       | scripts/seed-secret.sh occitan/github
 echo -n "$GITLAB_TOKEN"       | scripts/seed-secret.sh occitan/gitlab --restart agents/guilhem
 ```

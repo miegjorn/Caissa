@@ -571,6 +571,13 @@ spec:
                   name: anthropic
                   key: api-key
                   optional: false
+            # Optional for grok complementary
+            - name: XAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: xai
+                  key: api-key
+                  optional: true
             - name: SRE_MATRIX_ROOM_ID
               value: {{ .Values.sre.matrixRoomId | quote }}
             - name: BACKLOG_MATRIX_ROOM_ID

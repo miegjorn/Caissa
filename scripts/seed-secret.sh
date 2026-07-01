@@ -11,6 +11,7 @@
 #   echo -n "$GITHUB_TOKEN"             | scripts/seed-secret.sh occitan/github
 #   echo -n "$GITLAN_PAT_CLASSIC_TOKEN" | scripts/seed-secret.sh occitan/gitlab --restart agents/guilhem
 #   echo -n "$ANTHROPIC_API_KEY"        | scripts/seed-secret.sh occitan/anthropic
+#   echo -n "$XAI_API_KEY"              | scripts/seed-secret.sh occitan/xai
 #
 # Flags:
 #   --restart <ns>/<deployment>   restart a deployment after seeding (repeatable)

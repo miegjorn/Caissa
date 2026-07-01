@@ -57,6 +57,7 @@ kubectl rollout restart deploy/gardian -n occitan-system 2>&1 | tail -1
 echo "=== re-seed application secrets into OpenBao ==="
 echo "  Run:"
 echo "    echo -n \"\$ANTHROPIC_API_KEY\" | scripts/seed-secret.sh occitan/anthropic"
+echo "    echo -n \"\$XAI_API_KEY\"         | scripts/seed-secret.sh occitan/xai"
 echo "    echo -n \"\$GITHUB_TOKEN\"       | scripts/seed-secret.sh occitan/github"
 echo "    echo -n \"\$GITLAB_TOKEN\"       | scripts/seed-secret.sh occitan/gitlab --restart agents/guilhem"
 echo "    echo -n \"\$GHCR_PAT\"           | scripts/seed-secret.sh occitan/ghcr"

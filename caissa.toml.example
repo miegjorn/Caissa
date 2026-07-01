@@ -22,6 +22,11 @@ dispatcher_mcp_url = "http://dispatcher.agents.svc.cluster.local:9090/mcp"
 # chronicle_model = "claude-haiku-4-5"   # routine observation; cheapest
 # matrix_model    = "claude-sonnet-4-6"  # interactive Matrix replies
 # dream_model     = "claude-sonnet-4-6"  # nightly dream synthesis; Sonnet is appropriate
+#
+# For complementary multi-model runs (Anthropic + Grok together, dynamic per-stance/participant):
+# set e.g. matrix_model = "grok-3" and configure the participant in Amassada canvas to use endpoint
+# pointing at a Grok-backed service. Direct Anthropic path remains for claude* models.
+# See dispatch guard in Amassada and model in Fondament definitions.
 
 [sandbox]
 image = "caissa-sandbox:latest"
