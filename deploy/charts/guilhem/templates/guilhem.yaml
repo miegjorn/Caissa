@@ -671,6 +671,39 @@ spec:
               memory: 32Mi
             limits:
               memory: 64Mi
+        # GitHub → NATS polling sidecar (Occitan#36).
+        # Polls GitHub API for new/updated issues; publishes to occitan.github.issues.<component>.
+        # Requires GITHUB_TOKEN (read:org + repo scope) to avoid the 60 req/h unauthenticated limit.
+        - name: github-sync
+          image: {{ .Values.caissaImage }}
+          imagePullPolicy: Always
+          command: ["caissa", "sync"]
+          env:
+            - name: NERVI_MCP_URL
+              value: "http://nervi.occitan-system.svc.cluster.local:8080/mcp"
+            - name: GITHUB_POLL_INTERVAL_SECS
+              value: {{ .Values.githubSync.pollIntervalSecs | quote }}
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: github-sync
+                  key: token
+                  optional: true
+            {{- if .Values.githubSync.repos }}
+            - name: GITHUB_POLL_REPOS
+              value: {{ .Values.githubSync.repos | join "," | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: caissa-config
+              mountPath: /workspace/caissa.toml
+              subPath: caissa.toml
+              readOnly: true
+          resources:
+            requests:
+              cpu: 5m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
       volumes:
         - name: caissa-config
           configMap:

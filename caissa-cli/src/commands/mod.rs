@@ -8,4 +8,5 @@ pub mod push;
 pub mod report;
 pub mod sandbox;
 pub mod spawn;
+pub mod sync;
 pub mod watch;
