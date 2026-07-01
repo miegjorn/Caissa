@@ -230,9 +230,12 @@ hard-coded token needed). Pipe the secret value over stdin:
 ```bash
 echo -n "$ANTHROPIC_API_KEY"  | scripts/seed-secret.sh occitan/anthropic
 echo -n "$XAI_API_KEY"        | scripts/seed-secret.sh occitan/xai
-echo -n "$GITHUB_TOKEN"       | scripts/seed-secret.sh occitan/github
 echo -n "$GITLAB_TOKEN"       | scripts/seed-secret.sh occitan/gitlab --restart agents/guilhem
 ```
+
+GitHub credentials are seeded separately — see "Guilhem's GitHub / GitLab access" below.
+`occitan/github` (a static personal access token) is retired; agent containers now
+authenticate as the `guilhem-bot` GitHub App instead.
 
 Gardian fronts these: with `BAO_ADDR=http://openbao:8200` set (it is, in values.yaml),
 `gardian-server` selects its `OpenBaoBackend` and resolves e.g. `occitan/anthropic` →
@@ -466,19 +469,62 @@ kubectl exec -n agents deployment/guilhem -- \
 
 ### Guilhem's GitHub / GitLab access
 
-The agent image ships `git`, `gh`, and `glab`. The Guilhem pod's initContainer pulls the
-`occitan/github` and `occitan/gitlab` tokens from OpenBao into an in-memory `/creds` volume
-(`tokens.env` + `.git-credentials` + `.gitconfig`); the listener sources them so Guilhem and
-its `claude` subprocess can clone/push and use the CLIs. Verify:
+The agent image ships `git`, `gh`, and `glab`. GitLab still uses a static token
+(`occitan/gitlab`, seeded above) — GitHub does not.
+
+Every agent container (Guilhem + the 8 component agents) authenticates to GitHub as a
+registered GitHub App (`guilhem-bot`), not a personal access token. This exists so
+CODEOWNERS/branch-protection review requirements can't be satisfied by the same identity
+that opened the PR — see `Occitan/docs/superpowers/specs/2026-07-01-guilhem-github-app-identity-design.md`
+for the full rationale (PR #49 in this repo got stuck `REVIEW_REQUIRED` under the old
+shared-PAT model, which is what motivated this).
+
+**One-time setup** (see the design spec for the full GitHub UI walkthrough):
+1. Register the GitHub App on the `miegjorn` org, generate a private key, install it on
+   all 9 repos.
+2. Seed its credentials into OpenBao:
+   ```bash
+   echo -n "$APP_ID"             | scripts/seed-secret.sh occitan/github-app-id
+   echo -n "$INSTALLATION_ID"    | scripts/seed-secret.sh occitan/github-app-installation-id
+   cat "$PRIVATE_KEY_PEM_FILE"   | scripts/seed-secret.sh occitan/github-app-private-key
+   ```
+
+**How it works at runtime:** the `fetch-tokens` initContainer pulls those three raw values
+into `/creds/` (no token minted yet). The listener wrapper then sources
+`sandbox/mint-github-token.sh` and calls `mint_installation_token`, which JWT-signs a
+request with the App's private key and exchanges it for a 1-hour installation token,
+written into `/creds/tokens.env` and `/creds/.git-credentials`. Guilhem's long-running
+listener re-mints every 45 minutes via a backgrounded loop; each `claude` subprocess it
+spawns re-reads the token file fresh at spawn time (`github_token_envs()` in
+`caissa-cli/src/commands/listen.rs`) rather than relying on inherited environment, since a
+long-lived process's own env doesn't pick up a file rewritten after it started. Dispatched
+task Jobs and the `ingest` CronJob mint once at startup (they're short-lived, no refresh
+needed).
+
+Verify:
 
 ```bash
-GP=$(kubectl get pod -n agents -l app.kubernetes.io/name=guilhem -o name | head -1)
-kubectl exec -n agents "$GP" -- sh -lc '. /creds/tokens.env; gh api user --jq .login'
-kubectl exec -n agents "$GP" -- sh -lc '. /creds/tokens.env; glab api user | python3 -c "import sys,json;print(json.load(sys.stdin)[\"username\"])"'
+GP=$(kubectl get pod -n agents -l app=guilhem -o name | head -1)
+kubectl exec -n agents "$GP" -c guilhem -- sh -lc '. /creds/tokens.env; curl -s -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" https://api.github.com/installation/repositories | python3 -c "import sys,json;print(json.load(sys.stdin)[\"total_count\"])"'
+# → 9 (one per installed repo)
+kubectl exec -n agents "$GP" -c guilhem -- sh -lc '. /creds/tokens.env; glab api user | python3 -c "import sys,json;print(json.load(sys.stdin)[\"username\"])"'
 ```
 
-> To rotate a token: `echo -n "$NEW" | scripts/seed-secret.sh occitan/gitlab --restart agents/guilhem`.
+Note: GitHub Apps don't have a `/user` endpoint the way personal accounts do, so
+`gh api user` won't work for verifying identity — use `/installation/repositories` instead,
+or check a PR's author on github.com (should show `guilhem-bot[bot]`, not `bedardpl`).
+
+> To rotate the GitLab token: `echo -n "$NEW" | scripts/seed-secret.sh occitan/gitlab --restart agents/guilhem`.
 > Note: the classic GitLab PAT zshrc var is named `GITLAN_PAT_CLASSIC_TOKEN` (typo: GITLAN not GITLAB).
+> To rotate the GitHub App's private key: generate a new one in the App's settings, then
+> `echo -n "$NEW_KEY_PEM" | scripts/seed-secret.sh occitan/github-app-private-key --restart agents/guilhem`,
+> then also restart the 8 component agents: `kubectl get deployments -n agents -l
+> argocd.argoproj.io/instance=component-agents -o name | xargs -I{} kubectl rollout restart
+> -n agents {}`. This matters because the `fetch-tokens` initContainer only fetches from
+> OpenBao once at pod start and caches the key to `/creds/github-app-private-key.pem`;
+> minting reads that cached file, not OpenBao directly, so every agent pod needs a restart
+> for a rotated key to take effect. Revoke the old key in the App's settings only after every
+> pod has picked up the new one.
 
 ---
 
