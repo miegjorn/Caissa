@@ -1,6 +1,6 @@
 # caissa binary image used for all component agent pods.
 # Same binary as Guilhem — only the Farga project context differs.
-image: ghcr.io/miegjorn/caissa-sandbox:guilhem-sha-0efbc1e
+image: ghcr.io/miegjorn/caissa-sandbox:guilhem-sha-8993089
 
 imagePullSecrets:
   - name: ghcr-creds
