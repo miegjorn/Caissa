@@ -131,6 +131,7 @@ ROOM_COR=$(create_room "Cor" "cor");                       green "cor room: $ROO
 ROOM_CAISSA=$(create_room "Caissa" "caissa");              green "caissa room: $ROOM_CAISSA"
 ROOM_CHARRADISSA=$(create_room "Charradissa" "charradissa"); green "charradissa room: $ROOM_CHARRADISSA"
 ROOM_NERVI=$(create_room "Nervi" "nervi");                 green "nervi room: $ROOM_NERVI"
+ROOM_APPROVAL=$(create_room "Code Approval" "occitan-code-approval"); green "approval room: $ROOM_APPROVAL"
 
 # ─── Step 5: Create Occitan space ─────────────────────────────────────────────
 blue "Creating Occitan space..."
@@ -148,7 +149,7 @@ green "Occitan space: $SPACE_ID"
 
 # Add all component rooms as space children
 for ROOM_ID in "$ROOM_GUILHEM" "$ROOM_GARDIAN" "$ROOM_FONDAMENT" "$ROOM_FARGA" \
-               "$ROOM_AMASSADA" "$ROOM_COR" "$ROOM_CAISSA" "$ROOM_CHARRADISSA" "$ROOM_NERVI"; do
+               "$ROOM_AMASSADA" "$ROOM_COR" "$ROOM_CAISSA" "$ROOM_CHARRADISSA" "$ROOM_NERVI" "$ROOM_APPROVAL"; do
   ENCODED=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$ROOM_ID'))")
   curl -sf -X PUT "${HOMESERVER}/_matrix/client/v3/rooms/${ENCODED}/state/m.space.child/${ENCODED}" \
     -H "Authorization: Bearer ${PIERRE_LUC_TOKEN}" \
@@ -172,6 +173,9 @@ echo "\"${ROOM_COR}\"        = \"http://cor-agent.agents.svc.cluster.local:8080\
 echo "\"${ROOM_CAISSA}\"     = \"http://caissa-agent.agents.svc.cluster.local:8080\""
 echo "\"${ROOM_CHARRADISSA}\" = \"http://charradissa-agent.agents.svc.cluster.local:8080\""
 echo "\"${ROOM_NERVI}\"      = \"http://nervi-agent.agents.svc.cluster.local:8080\""
+echo ""
+echo "charradissa.approvalRoomId (paste into Caissa/deploy/charts/occitan/values.yaml or values-production.yaml, then commit — this is a Helm value, NOT part of the ConfigMap patch below):"
+echo "  approvalRoomId: \"${ROOM_APPROVAL}\""
 echo ""
 
 # ─── Step 7: Patch the charradissa-config ConfigMap in-cluster ───────────────
