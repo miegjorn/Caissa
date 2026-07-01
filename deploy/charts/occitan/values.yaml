@@ -41,9 +41,9 @@ amassada:
   image: ghcr.io/miegjorn/amassada
   imageTag: sha-2c18794 # CI writes sha-<sha> here on every main push
   replicas: 1
-  port: 7700
+  port: 7600
   env:
-    AMASSADA_PORT: "7700"
+    AMASSADA_PORT: "7600"
     AMASSADA_CANVAS_DIR: /canvases/stdlib
     # Project registry path — mounted from the amassada-projects ConfigMap below.
     AMASSADA_PROJECTS_PATH: /config/projects.toml
@@ -105,7 +105,7 @@ charradissa:
         - rooms:
             - "!zSeBDhFjVObXNpqAtF:occitane.guilhem"
           projectId: "occitan"
-          endpoint: "http://amassada:7700/sessions/{room_id}/message"
+          endpoint: "http://amassada:7600/sessions/{room_id}/message"
       # Per-room routes → independent component agent pods (deploy/charts/component-agents).
       routes:
         - roomId: "!oLMfqkKWdLOsoYfFJF:occitane.guilhem"

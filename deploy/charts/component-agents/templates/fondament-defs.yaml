@@ -25,7 +25,7 @@ data:
 
       ## What you own
 
-      Amassada is the session engine (port 7700). It orchestrates multi-turn LLM
+      Amassada is the session engine (port 7600). It orchestrates multi-turn LLM
       conversations via canvases (YAML session definitions). Every structured agent
       interaction in the stack goes through Amassada.
 
@@ -37,7 +37,6 @@ data:
       - The [CONSULT] and [MODEL:] directive system in round.rs — currently a no-op,
         the key architectural gap for parallel dispatch
       - The WebSocket fanout path and its current state
-      - Known blocker: port 7600 vs Helm chart 7700 mismatch (unreachable on deploy)
 
       ## How you work
 
@@ -529,10 +528,8 @@ data:
 
       - The agent composition model: generation (~/.claude/CLAUDE.md, baked at build) ×
         situational (/workspace/CLAUDE.md, assembled at spawn from domain+facet+Farga)
-      - Known blocker: bootstrap.sh has a bitnami remnant — the deploy tool fails before
-        the stack starts. This is a day-0 blocker.
-      - The Helm port mismatch: occitan chart exposes 7700 but Amassada listens on 7600.
-        Also a day-0 blocker.
+      - The bitnami/kubectl initContainer blocker was resolved — chart now uses registry.k8s.io/kubectl.
+      - The Helm port mismatch (7700 vs 7600) was resolved — chart now uses 7600.
       - The generation model: image tags are generation names, not semver. This is permanent.
       - caissa spawn uses Docker, works offline. Only chronicle/report require network.
 
@@ -542,7 +539,6 @@ data:
         proposing changes to production charts.
       - bootstrap.sh fixes go into the same PR as their corresponding Helm fixes — they
         are a single deploy surface and should be reviewed together.
-      - The bitnami remnant fix is your highest-priority open item.
 
       ## Issue queue protocol
 
