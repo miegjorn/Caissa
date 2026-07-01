@@ -302,6 +302,29 @@ async fn handle_sre_alert(
     StatusCode::ACCEPTED
 }
 
+/// Reads GH_TOKEN/GITHUB_TOKEN fresh from /creds/tokens.env at call time, so each
+/// spawned `claude` subprocess picks up whatever the container's background refresh
+/// loop most recently minted. This process's own inherited environment is fixed at
+/// its own startup and never reflects later rewrites of that file, so every call
+/// site that spawns `claude` must re-read here rather than relying on inherited env.
+fn github_token_envs() -> Vec<(String, String)> {
+    let content = match std::fs::read_to_string("/creds/tokens.env") {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    content
+        .lines()
+        .filter_map(|line| {
+            let rest = line.strip_prefix("export ")?;
+            let (key, value) = rest.split_once('=')?;
+            if key != "GH_TOKEN" && key != "GITHUB_TOKEN" {
+                return None;
+            }
+            Some((key.to_string(), value.trim_matches('\'').to_string()))
+        })
+        .collect()
+}
+
 async fn run_sre_alert(state: &ListenState) -> anyhow::Result<()> {
     let mcp_config = serde_json::to_string(&serde_json::json!({
         "mcpServers": guilhem_mcp_servers(state)
@@ -324,6 +347,7 @@ async fn run_sre_alert(state: &ListenState) -> anyhow::Result<()> {
         ])
         .env("FARGA_URL", &state.farga_url)
         .env("FARGA_PROJECT", &state.farga_project)
+        .envs(github_token_envs())
         .output()
         .await?;
 
@@ -541,6 +565,7 @@ async fn run_chronicle(state: &ListenState, prompt: &str) -> anyhow::Result<()> 
             ])
             .env("FARGA_URL", &state.farga_url)
             .env("FARGA_PROJECT", &state.farga_project)
+            .envs(github_token_envs())
             .output()
             .await?;
 
@@ -626,6 +651,7 @@ async fn run_backlog_review(state: &ListenState) -> anyhow::Result<()> {
             ])
             .env("FARGA_URL", &state.farga_url)
             .env("FARGA_PROJECT", &state.farga_project)
+            .envs(github_token_envs())
             .output()
             .await?;
 
@@ -782,6 +808,7 @@ async fn run_dream(state: &ListenState) -> anyhow::Result<()> {
         ])
         .env("FARGA_URL", &state.farga_url)
         .env("FARGA_PROJECT", &state.farga_project)
+        .envs(github_token_envs())
         .output()
         .await?;
 
@@ -1027,6 +1054,7 @@ async fn run_scan(state: &ListenState) -> anyhow::Result<()> {
         ])
         .env("FARGA_URL", &state.farga_url)
         .env("FARGA_PROJECT", &state.farga_project)
+        .envs(github_token_envs())
         .output()
         .await?;
 
@@ -1263,6 +1291,7 @@ async fn run_dispatch(state: &ListenState) -> anyhow::Result<()> {
         ])
         .env("FARGA_URL", &state.farga_url)
         .env("FARGA_PROJECT", &state.farga_project)
+        .envs(github_token_envs())
         .output()
         .await?;
 
@@ -1424,6 +1453,7 @@ async fn run_mission_pulse(state: &ListenState) -> anyhow::Result<()> {
         ])
         .env("FARGA_URL", &state.farga_url)
         .env("FARGA_PROJECT", &state.farga_project)
+        .envs(github_token_envs())
         .output()
         .await?;
 
@@ -1618,6 +1648,7 @@ async fn run_intake(state: &ListenState, description: &str) -> anyhow::Result<()
         ])
         .env("FARGA_URL", &state.farga_url)
         .env("FARGA_PROJECT", &state.farga_project)
+        .envs(github_token_envs())
         .output()
         .await?;
 
@@ -2265,6 +2296,7 @@ async fn run_component_agent(state: &ListenState, component: &str, payload: &str
             ])
             .env("FARGA_URL", &state.farga_url)
             .env("FARGA_PROJECT", &state.farga_project)
+            .envs(github_token_envs())
             .output()
             .await?;
 

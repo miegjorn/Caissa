@@ -84,6 +84,12 @@ RUN printf '{"permissions":{"allow":["Edit(/root/.claude/CLAUDE.md)","Write(/roo
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# Shared GitHub App token-minting function — sourced by entrypoint.sh and by
+# the guilhem/component-agents chart wrappers that exec `caissa listen`/
+# `caissa ingest` directly, bypassing entrypoint.sh entirely.
+COPY mint-github-token.sh /usr/local/bin/mint-github-token.sh
+RUN chmod +x /usr/local/bin/mint-github-token.sh
+
 # Bake Fondament domain + role definitions into the image so agents can
 # read them at runtime to assemble context for sub-agent invocations.
 # Guilhem reads /fondament/domains/<domain>.yaml and /fondament/roles/<facet>.yaml

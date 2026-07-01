@@ -91,6 +91,11 @@ spec:
           args:
             - |
               [ -f /creds/tokens.env ] && . /creds/tokens.env
+              . /usr/local/bin/mint-github-token.sh
+              if [ -f /creds/github-app-id ]; then
+                mint_installation_token || echo "[{{ .name }}-agent] continuing without a fresh GitHub token" >&2
+                (while true; do sleep 2700; mint_installation_token || echo "[{{ .name }}-agent] token refresh failed, will retry next cycle" >&2; done) &
+              fi
               exec caissa listen --port 8080
           env:
             - name: FARGA_URL
@@ -360,6 +365,8 @@ spec:
               args:
                 - |
                   [ -f /creds/tokens.env ] && . /creds/tokens.env
+                  . /usr/local/bin/mint-github-token.sh
+                  [ -f /creds/github-app-id ] && { mint_installation_token || echo "[ingest] continuing without a fresh GitHub token" >&2; }
                   exec caissa ingest --component {{ .name }}
               env:
                 - name: FARGA_URL

@@ -570,10 +570,21 @@ spec:
           # Webhook listener — accepts POST /trigger/chronicle from Argo Workflows.
           # Wrapper sources the OpenBao-provided tokens and points git at the shared
           # gitconfig, then exec's the listener so claude inherits the credentials.
+          #
+          # caissa listen spawns a fresh `claude` subprocess per request rather than
+          # running one long-lived process, and each spawn reads GH_TOKEN/GITHUB_TOKEN
+          # fresh from /creds/tokens.env at call time (see github_token_envs() in
+          # caissa-cli/src/commands/listen.rs) — so the background refresh loop here
+          # only needs to keep that file current, not caissa's own process env.
           command: ["/bin/sh", "-c"]
           args:
             - |
               [ -f /creds/tokens.env ] && . /creds/tokens.env
+              . /usr/local/bin/mint-github-token.sh
+              if [ -f /creds/github-app-id ]; then
+                mint_installation_token || echo "[guilhem] continuing without a fresh GitHub token" >&2
+                (while true; do sleep 2700; mint_installation_token || echo "[guilhem] token refresh failed, will retry next cycle" >&2; done) &
+              fi
               export GIT_CONFIG_GLOBAL=/creds/.gitconfig
               export PATH="/tools:$PATH"
               exec caissa listen --port 8080
