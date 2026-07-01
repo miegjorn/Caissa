@@ -4,8 +4,24 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    paths:
+      - 'src/**'
+      - 'caissa-cli/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'Dockerfile'
+      - 'sandbox/**'
+      - '.github/workflows/build.yml'
   pull_request:
     branches: [main]
+    paths:
+      - 'src/**'
+      - 'caissa-cli/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'Dockerfile'
+      - 'sandbox/**'
+      - '.github/workflows/build.yml'
 
 permissions:
   contents: read
