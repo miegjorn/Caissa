@@ -497,12 +497,16 @@ spec:
         # The ServiceAccount token is auto-mounted at /var/run/secrets/kubernetes.io/serviceaccount/
         # and kubectl picks it up automatically via in-cluster config.
         - name: install-kubectl
-          # registry.k8s.io/kubectl replaces bitnami/kubectl — bitnami images are no
-          # longer reliably pullable from Docker Hub (same issue as postgres subchart).
-          # Binary path in the official kubectl image is /usr/local/bin/kubectl.
-          image: registry.k8s.io/kubectl:v1.31.0
+          # alpine: has sh + wget; downloads kubectl from the official release URL.
+          # registry.k8s.io/kubectl is distroless (no cp/sh) so can't be used for this.
+          image: alpine:3.19
           imagePullPolicy: IfNotPresent
-          command: ["cp", "/usr/local/bin/kubectl", "/tools/kubectl"]
+          command: ["sh", "-c"]
+          args:
+            - |
+              wget -qO /tools/kubectl \
+                "https://dl.k8s.io/release/v1.31.0/bin/linux/amd64/kubectl" \
+              && chmod +x /tools/kubectl
           volumeMounts:
             - name: tools
               mountPath: /tools

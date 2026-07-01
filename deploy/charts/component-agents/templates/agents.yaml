@@ -198,7 +198,7 @@ spec:
               command: ["/bin/sh", "-c"]
               args:
                 - |
-                  apt-get update -qq && apt-get install -y -qq gh curl 2>/dev/null || true
+                  apt-get update -qq && apt-get install -y -qq gh curl python3 2>/dev/null || true
                   [ -f /creds/tokens.env ] && . /creds/tokens.env
                   set -eu
                   COMPONENT="{{ .name }}"
