@@ -220,13 +220,14 @@ spec:
                     --jq '[.[] | select(.pull_request == null) | {number,title,body,labels,url}]' \
                     2>/dev/null || echo "[]")
 
-                  COUNT=$(echo "${ISSUES}" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))")
+                  COUNT=$(echo "${ISSUES}" | python3 -c "import json,sys; d=sys.stdin.read(); print(len(json.loads(d, strict=False)) if d.strip() else 0)")
                   echo "Found ${COUNT} open issues"
 
                   # Publish each issue individually to NATS via Nervi MCP
                   echo "${ISSUES}" | python3 -c "
                   import json, sys, urllib.request, urllib.error
-                  issues = json.load(sys.stdin)
+                  raw = sys.stdin.read()
+                  issues = json.loads(raw, strict=False) if raw.strip() else []
                   nervi = sys.argv[1]
                   subject = sys.argv[2]
                   for issue in issues:
