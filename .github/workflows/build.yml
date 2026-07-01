@@ -102,4 +102,5 @@ jobs:
           git config user.email "ci@miegjorn.dev"
           git add deploy/charts/guilhem/values.yaml deploy/charts/component-agents/values.yaml
           git diff --staged --quiet || git commit -m "chore(ci): update guilhem image to sha-$SHA [skip ci]"
+          git pull --rebase origin main
           git push
