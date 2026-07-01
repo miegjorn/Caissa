@@ -1,0 +1,56 @@
+{{- if .Values.valkey.enabled }}
+# Valkey — Redis-compatible cache required by Authentik (sessions, tasks, results).
+# Valkey is the BSD-licensed Redis OSS fork maintained by the Linux Foundation.
+apiVersion: v1
+kind: Service
+metadata:
+  name: valkey
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "occitan.selectorLabels" (dict "component" "valkey" "context" .) | nindent 4 }}
+  ports:
+    - port: 6379
+      targetPort: 6379
+      name: redis
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: valkey
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+    {{- include "occitan.selectorLabels" (dict "component" "valkey" "context" .) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "occitan.selectorLabels" (dict "component" "valkey" "context" .) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "occitan.selectorLabels" (dict "component" "valkey" "context" .) | nindent 8 }}
+    spec:
+      containers:
+        - name: valkey
+          image: {{ .Values.valkey.image }}
+          imagePullPolicy: IfNotPresent
+          args: ["--save", "60", "1", "--loglevel", "warning"]
+          ports:
+            - containerPort: 6379
+              name: redis
+          readinessProbe:
+            exec:
+              command: ["valkey-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: {{ .Values.valkey.memoryLimit }}
+{{- end }}

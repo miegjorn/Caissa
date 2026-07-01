@@ -1,0 +1,208 @@
+{{- if .Values.authentik.enabled }}
+# Authentik — self-hosted identity provider (OIDC/SSO).
+# Provides:
+#   - Human admin identity for Gardian POST /authorize (OIDC JWT → scoped RootToken)
+#   - Synapse SSO (Element login via Authentik)
+#
+# Backing stores:
+#   - PostgreSQL: 'authentik' database on the shared cluster
+#     (created by the initdb ConfigMap mounted in templates/postgresql.yaml;
+#      only effective on FIRST cluster init — re-init if PVC is new)
+#   - Valkey: cache for sessions and Celery task results (templates/valkey.yaml)
+#
+# Required k8s Secrets (created out-of-band, never in this chart):
+#   authentik:
+#     secret-key:          random 50+ char string (seed via: openssl rand -base64 50)
+#     postgresql-password: matches .Values.authentik.postgresql.password in values.yaml
+#     bootstrap-password:  initial admin password (seeded into openBao, see below)
+#
+# Post-deployment setup (run ONCE after first Authentik pod is healthy):
+#   1. Seed bootstrap credentials into openBao:
+#        echo -n "$AUTHENTIK_BOOTSTRAP_PASSWORD" | scripts/seed-secret.sh occitan/authentik-bootstrap-password
+#        echo -n "$AUTHENTIK_SECRET_KEY"          | scripts/seed-secret.sh occitan/authentik-secret-key
+#   2. Create the 'authentik' k8s Secret from openBao values.
+#   3. In the Authentik admin UI (http://<node-ip>:{{ .Values.authentik.port }}/if/admin/):
+#      a. Create OAuth2 application "gardian" (slug: gardian)
+#         Set redirect URIs and note the client secret → update values.authentik.gardianClientId
+#      b. Create OAuth2 application "synapse" (slug: synapse)
+#         Note client ID and secret → create 'synapse-oidc' k8s Secret (key: client-secret)
+#   4. `helm upgrade` to apply Synapse OIDC config (after step 3).
+#
+# Gardian OIDC issuer (internal, for JWKS fetch from gardian pod):
+#   http://authentik:{{ .Values.authentik.port }}/application/o/gardian/
+# Synapse OIDC issuer (external, for browser-side redirects):
+#   {{ .Values.authentik.externalUrl }}/application/o/synapse/
+
+# ── ConfigMap: Authentik environment ─────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: authentik-env
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+data:
+  AUTHENTIK_POSTGRESQL__HOST: {{ include "occitan.postgresHost" . | quote }}
+  AUTHENTIK_POSTGRESQL__PORT: "5432"
+  AUTHENTIK_POSTGRESQL__NAME: {{ .Values.authentik.postgresql.database | quote }}
+  AUTHENTIK_POSTGRESQL__USER: {{ .Values.authentik.postgresql.user | quote }}
+  AUTHENTIK_REDIS__HOST: "valkey"
+  AUTHENTIK_REDIS__PORT: "6379"
+  AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+  AUTHENTIK_LISTEN__HTTP: "0.0.0.0:{{ .Values.authentik.port }}"
+  AUTHENTIK_LISTEN__HTTPS: "0.0.0.0:9443"
+  # Log level: info | warning | error | debug
+  AUTHENTIK_LOG_LEVEL: "info"
+---
+# ── Server ────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: authentik-server
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+    {{- include "occitan.selectorLabels" (dict "component" "authentik-server" "context" .) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "occitan.selectorLabels" (dict "component" "authentik-server" "context" .) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "occitan.selectorLabels" (dict "component" "authentik-server" "context" .) | nindent 8 }}
+    spec:
+      initContainers:
+        # Run migrations before the server starts.
+        - name: migrate
+          image: {{ .Values.authentik.image }}:{{ .Values.authentik.imageTag }}
+          imagePullPolicy: IfNotPresent
+          command: ["ak", "migrate"]
+          envFrom:
+            - configMapRef:
+                name: authentik-env
+          env:
+            - name: AUTHENTIK_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: authentik
+                  key: secret-key
+            - name: AUTHENTIK_POSTGRESQL__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: authentik
+                  key: postgresql-password
+            - name: AUTHENTIK_BOOTSTRAP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: authentik
+                  key: bootstrap-password
+      containers:
+        - name: authentik-server
+          image: {{ .Values.authentik.image }}:{{ .Values.authentik.imageTag }}
+          imagePullPolicy: IfNotPresent
+          command: ["ak", "server"]
+          envFrom:
+            - configMapRef:
+                name: authentik-env
+          env:
+            - name: AUTHENTIK_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: authentik
+                  key: secret-key
+            - name: AUTHENTIK_POSTGRESQL__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: authentik
+                  key: postgresql-password
+            - name: AUTHENTIK_BOOTSTRAP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: authentik
+                  key: bootstrap-password
+          ports:
+            - containerPort: {{ .Values.authentik.port }}
+              name: http
+            - containerPort: 9443
+              name: https
+          readinessProbe:
+            httpGet:
+              path: /-/health/ready/
+              port: {{ .Values.authentik.port }}
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 8
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+---
+# ── Worker ────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: authentik-worker
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+    {{- include "occitan.selectorLabels" (dict "component" "authentik-worker" "context" .) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "occitan.selectorLabels" (dict "component" "authentik-worker" "context" .) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "occitan.selectorLabels" (dict "component" "authentik-worker" "context" .) | nindent 8 }}
+    spec:
+      containers:
+        - name: authentik-worker
+          image: {{ .Values.authentik.image }}:{{ .Values.authentik.imageTag }}
+          imagePullPolicy: IfNotPresent
+          command: ["ak", "worker"]
+          envFrom:
+            - configMapRef:
+                name: authentik-env
+          env:
+            - name: AUTHENTIK_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: authentik
+                  key: secret-key
+            - name: AUTHENTIK_POSTGRESQL__PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: authentik
+                  key: postgresql-password
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+---
+# ── Service ───────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: authentik
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+spec:
+  type: LoadBalancer
+  selector:
+    {{- include "occitan.selectorLabels" (dict "component" "authentik-server" "context" .) | nindent 4 }}
+  ports:
+    - port: {{ .Values.authentik.port }}
+      targetPort: {{ .Values.authentik.port }}
+      name: http
+    - port: 9443
+      targetPort: 9443
+      name: https
+{{- end }}

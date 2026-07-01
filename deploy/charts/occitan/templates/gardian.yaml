@@ -1,3 +1,33 @@
+{{- if .Values.authentik.enabled }}
+# Gardian OIDC policy — claim→scope mapping loaded by gardian-server at startup.
+# issuer: internal Authentik URL (pod→pod, no DNS resolution needed).
+# Post-deployment: update gardian_client_id if the OAuth2 slug differs.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gardian-oidc-policy
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+data:
+  oidc-policy.yaml: |
+    issuer: "http://authentik:{{ .Values.authentik.port }}/application/o/gardian/"
+    audience: "{{ .Values.authentik.gardianClientId }}"
+    jwks_ttl_seconds: 300
+    rules:
+      - match:
+          claim: groups
+          value: occitan-admins
+        grant:
+          - "*"
+      - match:
+          claim: groups
+          value: occitan-operators
+        grant:
+          - workspace:provision
+          - audit:read
+{{- end }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -32,6 +62,10 @@ spec:
             - name: {{ $k }}
               value: {{ $v | quote }}
             {{- end }}
+            {{- if .Values.authentik.enabled }}
+            - name: GARDIAN_OIDC_POLICY_PATH
+              value: /config/oidc-policy.yaml
+            {{- end }}
             {{- if .Values.openbao.enabled }}
             - name: BAO_TOKEN
               valueFrom:
@@ -39,6 +73,13 @@ spec:
                   name: openbao
                   key: token
             {{- end }}
+          {{- if .Values.authentik.enabled }}
+          volumeMounts:
+            - name: oidc-policy
+              mountPath: /config/oidc-policy.yaml
+              subPath: oidc-policy.yaml
+              readOnly: true
+          {{- end }}
           readinessProbe:
             httpGet:
               path: /health
@@ -51,6 +92,12 @@ spec:
               memory: 64Mi
             limits:
               memory: 256Mi
+      {{- if .Values.authentik.enabled }}
+      volumes:
+        - name: oidc-policy
+          configMap:
+            name: gardian-oidc-policy
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service

@@ -64,12 +64,23 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
+            {{- if .Values.authentik.enabled }}
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+            {{- end }}
           resources:
             requests:
               cpu: 100m
               memory: 256Mi
             limits:
               memory: 1Gi
+      {{- if .Values.authentik.enabled }}
+      volumes:
+        - name: init-scripts
+          configMap:
+            name: postgresql-init-scripts
+      {{- end }}
   volumeClaimTemplates:
     - metadata:
         name: data
@@ -78,4 +89,31 @@ spec:
         resources:
           requests:
             storage: {{ .Values.postgresql.persistence.size }}
+{{- end }}
+---
+{{- if and .Values.postgresql.enabled .Values.authentik.enabled }}
+# Init script: creates the 'authentik' database and user on FIRST PostgreSQL
+# initialisation. Has no effect if the PVC already contains initialised data.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgresql-init-scripts
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+data:
+  01-authentik-db.sql: |
+    -- Create Authentik database and user.
+    -- Password must match values.authentik.postgresql.password and the
+    -- 'authentik' k8s Secret key 'postgresql-password'.
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = {{ .Values.authentik.postgresql.user | squote }}) THEN
+        CREATE USER {{ .Values.authentik.postgresql.user }} WITH PASSWORD {{ .Values.authentik.postgresql.password | squote }};
+      END IF;
+    END
+    $$;
+    SELECT 'CREATE DATABASE {{ .Values.authentik.postgresql.database }} OWNER {{ .Values.authentik.postgresql.user }}'
+      WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = {{ .Values.authentik.postgresql.database | squote }})\gexec
+    GRANT ALL PRIVILEGES ON DATABASE {{ .Values.authentik.postgresql.database }} TO {{ .Values.authentik.postgresql.user }};
 {{- end }}
