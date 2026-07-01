@@ -571,11 +571,23 @@ spec:
                   name: anthropic
                   key: api-key
                   optional: false
-            # Optional for grok complementary
+            # Optional provider keys for OpenAI-compatible shim (xAI, OpenAI, Qwen, …)
             - name: XAI_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: xai
+                  key: api-key
+                  optional: true
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openai
+                  key: api-key
+                  optional: true
+            - name: QWEN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: qwen
                   key: api-key
                   optional: true
             - name: SRE_MATRIX_ROOM_ID

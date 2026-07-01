@@ -21,10 +21,17 @@
 #   ANTHROPIC_API_KEY   Required by claude
 
 # MODEL selects the LLM backend for model-agnostic complementary runs.
-# "claude*" (default) uses the claude CLI (full MCP/agentic).
-# "grok*" uses the basic xAI curl shim below (no MCP, no full agentic loop).
-# For proper agentic Grok use, configure the participant with an endpoint that
-# points at a Grok-backed service implementing the Amassada /turn protocol.
+# "claude*" (default) uses the claude CLI (full MCP/agentic loop).
+# Anything else uses the OpenAI-compatible shim below (no MCP, no agentic loop).
+# All major providers speak OpenAI-compatible APIs: xAI, OpenAI, Qwen, Mistral, etc.
+# For proper agentic use with non-Claude models, configure the participant with an
+# endpoint pointing at a service implementing the Amassada /turn protocol.
+#
+# Provider auto-detection (can always override with OPENAI_API_BASE + OPENAI_API_KEY):
+#   grok* / xai:*          → api.x.ai           key: XAI_API_KEY
+#   gpt-* / o1* / o3* / o4* / openai:* → api.openai.com  key: OPENAI_API_KEY
+#   qwen-* / qwq-*         → dashscope (aliyun) key: QWEN_API_KEY
+#   anything else           → OPENAI_API_BASE required, key: OPENAI_API_KEY
 MODEL="${MODEL:-claude}"
 
 set -e
@@ -71,37 +78,47 @@ if [ -n "${TASK:-}" ]; then
   # facet's tools.always_on list (see Fondament definitions/fondament/*.yaml);
   # the fallback here is intentionally read-only.
   printf '%s' "$TASK" > /tmp/agent-task.txt
-  if echo "$MODEL" | grep -qi "^grok"; then
-    # Basic Grok one-shot via xAI API (OpenAI-compatible).
-    #
-    # This is a lightweight, non-agentic shim for simple task execution.
-    # It has no MCP tool access and no full agentic loop (no claude --print + tools).
-    #
-    # Full agentic/MCP support for Grok models is intended to be provided by
-    # routing through an Amassada endpoint (POST /turn) to a dedicated Grok-backed
-    # service (e.g. something like grok-adversary.agents.svc...).
-    # The example endpoint in tests/canvases is illustrative; the service does not
-    # exist yet. Until such an endpoint service is built, this basic curl path is
-    # the only way to invoke grok* models from dispatched tasks.
-    #
-    # Requires XAI_API_KEY. Uses /workspace/CLAUDE.md as system prompt if present.
-    echo "[agent] Grok model $MODEL detected - basic xAI call"
-    SYSTEM=$(cat /workspace/CLAUDE.md 2>/dev/null | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))' || echo '""')
-    USER=$(cat /tmp/agent-task.txt | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
-    MODEL_JSON=$(python3 -c 'import sys,json; print(json.dumps(sys.argv[1]))' "$MODEL")
-    OUTPUT=$(curl -s -H "Authorization: Bearer ${XAI_API_KEY}" \
-      -H "Content-Type: application/json" \
-      -d "{\"model\": $MODEL_JSON, \"messages\": [{\"role\":\"system\",\"content\":$SYSTEM}, {\"role\":\"user\",\"content\":$USER}] }" \
-      https://api.x.ai/v1/chat/completions | python3 -c '
-import sys, json
-data = json.load(sys.stdin)
-print(data.get("choices",[{}])[0].get("message",{}).get("content",""))
-' 2>&1) || true
-  else
+  if echo "$MODEL" | grep -qi "^claude"; then
+    # Claude path — full MCP/agentic loop via claude CLI.
     OUTPUT=$(claude --print "$(cat /tmp/agent-task.txt)" \
       --mcp-config /root/.claude/claude_desktop_config.json \
       --allowed-tools "${ALLOWED_TOOLS:-mcp__farga__search_signals,mcp__farga__read_context}" \
       2>&1) || true
+  else
+    # OpenAI-compatible shim — single-shot, no MCP, no agentic loop.
+    # Covers xAI (grok*), OpenAI (gpt-*/o1/o3/o4), Qwen (qwen-*/qwq-*), and any
+    # other OpenAI-compatible provider. For proper agentic use, route via an
+    # Amassada endpoint implementing POST /turn instead.
+    case "$MODEL" in
+      grok*|xai:*)
+        _API_BASE="${OPENAI_API_BASE:-https://api.x.ai/v1}"
+        _API_KEY="${XAI_API_KEY:-${OPENAI_API_KEY:-}}"
+        ;;
+      gpt-*|o1*|o3*|o4*|openai:*)
+        _API_BASE="${OPENAI_API_BASE:-https://api.openai.com/v1}"
+        _API_KEY="${OPENAI_API_KEY:-}"
+        ;;
+      qwen-*|qwq-*)
+        _API_BASE="${OPENAI_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
+        _API_KEY="${QWEN_API_KEY:-${OPENAI_API_KEY:-}}"
+        ;;
+      *)
+        _API_BASE="${OPENAI_API_BASE:-}"
+        _API_KEY="${OPENAI_API_KEY:-}"
+        ;;
+    esac
+    echo "[agent] model $MODEL → $_API_BASE"
+    SYSTEM=$(cat /workspace/CLAUDE.md 2>/dev/null | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))' || echo '""')
+    USER=$(cat /tmp/agent-task.txt | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
+    MODEL_JSON=$(python3 -c 'import sys,json; print(json.dumps(sys.argv[1]))' "$MODEL")
+    OUTPUT=$(curl -s -H "Authorization: Bearer ${_API_KEY}" \
+      -H "Content-Type: application/json" \
+      -d "{\"model\": $MODEL_JSON, \"messages\": [{\"role\":\"system\",\"content\":$SYSTEM},{\"role\":\"user\",\"content\":$USER}]}" \
+      "${_API_BASE}/chat/completions" | python3 -c '
+import sys, json
+data = json.load(sys.stdin)
+print(data.get("choices",[{}])[0].get("message",{}).get("content",""))
+' 2>&1) || true
   fi
 
   # Post the result to Farga as a Signal under the session project.

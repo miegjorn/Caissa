@@ -404,12 +404,36 @@ async fn create_agent_job(
             }),
             ..Default::default()
         },
-        // XAI_API_KEY from the cluster secret (for grok* models, optional)
+        // Optional provider API keys for OpenAI-compatible shim (xAI, OpenAI, Qwen, …)
         EnvVar {
             name: "XAI_API_KEY".into(),
             value_from: Some(EnvVarSource {
                 secret_key_ref: Some(SecretKeySelector {
                     name: Some("xai".into()),
+                    key: "api-key".into(),
+                    optional: Some(true),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        EnvVar {
+            name: "OPENAI_API_KEY".into(),
+            value_from: Some(EnvVarSource {
+                secret_key_ref: Some(SecretKeySelector {
+                    name: Some("openai".into()),
+                    key: "api-key".into(),
+                    optional: Some(true),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        EnvVar {
+            name: "QWEN_API_KEY".into(),
+            value_from: Some(EnvVarSource {
+                secret_key_ref: Some(SecretKeySelector {
+                    name: Some("qwen".into()),
                     key: "api-key".into(),
                     optional: Some(true),
                 }),
