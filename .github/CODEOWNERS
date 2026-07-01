@@ -1,0 +1,6 @@
+# This file requires @bedardpl's review to change — see
+# Occitan/docs/superpowers/specs/2026-07-01-guilhem-merge-approval-design.md
+.github/CODEOWNERS @bedardpl
+
+# Helm charts and RBAC manifests — architecturally significant by definition.
+deploy/ @bedardpl
