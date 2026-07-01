@@ -494,9 +494,12 @@ spec:
         # The ServiceAccount token is auto-mounted at /var/run/secrets/kubernetes.io/serviceaccount/
         # and kubectl picks it up automatically via in-cluster config.
         - name: install-kubectl
-          image: bitnami/kubectl:latest
+          # registry.k8s.io/kubectl replaces bitnami/kubectl — bitnami images are no
+          # longer reliably pullable from Docker Hub (same issue as postgres subchart).
+          # Binary path in the official kubectl image is /usr/local/bin/kubectl.
+          image: registry.k8s.io/kubectl:v1.31.0
           imagePullPolicy: IfNotPresent
-          command: ["cp", "/opt/bitnami/kubectl/bin/kubectl", "/tools/kubectl"]
+          command: ["cp", "/usr/local/bin/kubectl", "/tools/kubectl"]
           volumeMounts:
             - name: tools
               mountPath: /tools
@@ -621,6 +624,15 @@ spec:
               port: 8080
             initialDelaySeconds: 3
             periodSeconds: 10
+          # livenessProbe restarts the container if the listener hangs or crashes
+          # and doesn't exit cleanly (e.g. deadlock). Complements the readinessProbe.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
         # SRE watchdog sidecar — no-LLM health probe (Caissa#25).
