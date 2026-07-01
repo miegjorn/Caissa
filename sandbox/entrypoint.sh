@@ -43,12 +43,16 @@ FARGA_URL="${FARGA_URL:-http://farga.occitan-system.svc.cluster.local:7500}"
 
 mkdir -p /root/.claude /workspace
 
-# Auto-approve all MCP tool calls — the container is already a trusted boundary.
-# File/bash tools still prompt in interactive mode; only MCP is bypassed.
+# Full bypass — container is a trusted boundary, no per-call prompts for
+# MCP, Bash, or kubectl.
 cat > /root/.claude/settings.json << 'EOF'
 {
   "permissions": {
-    "allow": ["mcp__*"]
+    "allow": [
+      "Bash(*)",
+      "Bash(kubectl *)"
+    ],
+    "defaultMode": "bypassPermissions"
   }
 }
 EOF
