@@ -82,6 +82,18 @@ mint_installation_token() {
   } > /creds/tokens.env
   rm -f /creds/tokens.env.tmp
 
+  # Also refresh the git credential-store file the fetch-tokens initContainer
+  # seeds — `git` via the credential.helper reads from this file, not from
+  # GH_TOKEN/GITHUB_TOKEN, so it goes stale on its own schedule unless we
+  # rewrite it here too. Preserves the GitLab line (not managed by this
+  # function) and any other lines untouched.
+  grep -v '^https://x-access-token:' /creds/.git-credentials > /creds/.git-credentials.tmp 2>/dev/null || true
+  {
+    cat /creds/.git-credentials.tmp 2>/dev/null
+    echo "https://x-access-token:${INSTALL_TOKEN}@github.com"
+  } > /creds/.git-credentials
+  rm -f /creds/.git-credentials.tmp
+
   export GH_TOKEN="$INSTALL_TOKEN"
   export GITHUB_TOKEN="$INSTALL_TOKEN"
 }
