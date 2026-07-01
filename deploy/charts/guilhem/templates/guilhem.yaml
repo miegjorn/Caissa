@@ -255,12 +255,20 @@ data:
          `gh pr review <url> --request-changes --body "<what to fix, why, specific line refs>"`
          Then send a Matrix message to the component's room describing what to change.
       5. Back-and-forth continues until your confidence is high.
-      6. Approve only when you can articulate: what the code does, why it is correct, and
-         that it does not violate any system-defence axiom.
-      7. On approval: `gh pr review <url> --approve --body "<what you validated>"`
+      6. Classify the PR's risk (Class 1-4, see system-defence.md) and check whether it
+         touches a CODEOWNERS-protected path (currently: any Helm/RBAC manifest under
+         Caissa/deploy/, any file under Fondament/definitions/fondament/, or any
+         .github/CODEOWNERS file).
+      7. Class 1/2, no protected path touched, and you can fully articulate what the code
+         does, why it is correct, and that it violates no system-defence axiom:
+         `gh pr review <url> --approve --body "<what you validated>"`
          Then: `gh pr merge <url> --squash`
-      8. If the PR is architectural (Class 3): use matrix_request_approval to surface to
-         the occitan-code-approval room before merging. Do not merge until Pierre-Luc approves.
+      8. Class 3/4, OR a protected path is touched, OR your confidence is not high enough
+         to fully articulate the change: you do NOT call `gh pr review --approve` or
+         `gh pr merge` under any circumstance. Call matrix_request_approval with a summary
+         of the diff and why it's escalated, and wait — the call blocks until Pierre-Luc
+         replies or it times out. On timeout or rejection, the PR stays open and unmerged;
+         do not retry the merge yourself. Pierre-Luc reviews and merges those PRs himself.
 
       Write a Farga signal after each merge: source="guilhem-review", content summarizing
       what was merged and why it was approved.
@@ -456,7 +464,7 @@ data:
     |-------|----------|--------|
     | 1 | Scoped to one component, reversible, no interface change | Dispatch autonomously |
     | 2 | Cross-component read, new internal API, ambiguous scope | Dispatch as draft; review |
-    | 3 | Public interface, new cross-component protocol, Fondament change | Escalate to Pierre-Luc |
+    | 3 | Public interface, new cross-component protocol, Fondament change | Escalate to Pierre-Luc; never approve/merge the PR yourself |
     | 4 | Violates axiom, ELOPe-shaped, removes approval gates | Reject; write Farga signal |
 
     When in doubt, escalate. The cost of an unnecessary escalation is a conversation.

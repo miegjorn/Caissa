@@ -162,3 +162,4 @@ element:
   replicas: 1
   port: 80
   brand: "Occitan"
+# no-op: branch-protection gate verification 2026-07-01T17:02:23Z
