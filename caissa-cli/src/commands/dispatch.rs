@@ -430,6 +430,18 @@ async fn create_agent_job(
             ..Default::default()
         },
         EnvVar {
+            name: "GEMINI_API_KEY".into(),
+            value_from: Some(EnvVarSource {
+                secret_key_ref: Some(SecretKeySelector {
+                    name: Some("gemini".into()),
+                    key: "api-key".into(),
+                    optional: Some(true),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        EnvVar {
             name: "QWEN_API_KEY".into(),
             value_from: Some(EnvVarSource {
                 secret_key_ref: Some(SecretKeySelector {

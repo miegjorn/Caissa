@@ -28,9 +28,10 @@
 # endpoint pointing at a service implementing the Amassada /turn protocol.
 #
 # Provider auto-detection (can always override with OPENAI_API_BASE + OPENAI_API_KEY):
-#   grok* / xai:*          → api.x.ai           key: XAI_API_KEY
-#   gpt-* / o1* / o3* / o4* / openai:* → api.openai.com  key: OPENAI_API_KEY
-#   qwen-* / qwq-*         → dashscope (aliyun) key: QWEN_API_KEY
+#   grok* / xai:*          → api.x.ai                           key: XAI_API_KEY
+#   gpt-* / o1* / o3* / o4* / openai:* → api.openai.com        key: OPENAI_API_KEY
+#   gemini-* / google:*    → generativelanguage.googleapis.com  key: GEMINI_API_KEY
+#   qwen-* / qwq-*         → dashscope (aliyun)                 key: QWEN_API_KEY
 #   anything else           → OPENAI_API_BASE required, key: OPENAI_API_KEY
 MODEL="${MODEL:-claude}"
 
@@ -97,6 +98,10 @@ if [ -n "${TASK:-}" ]; then
       gpt-*|o1*|o3*|o4*|openai:*)
         _API_BASE="${OPENAI_API_BASE:-https://api.openai.com/v1}"
         _API_KEY="${OPENAI_API_KEY:-}"
+        ;;
+      gemini-*|google:*)
+        _API_BASE="${OPENAI_API_BASE:-https://generativelanguage.googleapis.com/v1beta/openai}"
+        _API_KEY="${GEMINI_API_KEY:-${OPENAI_API_KEY:-}}"
         ;;
       qwen-*|qwq-*)
         _API_BASE="${OPENAI_API_BASE:-https://dashscope.aliyuncs.com/compatible-mode/v1}"

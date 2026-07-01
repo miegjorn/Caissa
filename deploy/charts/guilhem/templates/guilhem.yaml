@@ -584,6 +584,12 @@ spec:
                   name: openai
                   key: api-key
                   optional: true
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gemini
+                  key: api-key
+                  optional: true
             - name: QWEN_API_KEY
               valueFrom:
                 secretKeyRef:
