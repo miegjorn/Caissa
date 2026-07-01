@@ -198,7 +198,7 @@ spec:
               command: ["/bin/sh", "-c"]
               args:
                 - |
-                  apt-get update -q && apt-get install -y --no-install-recommends gh curl python3-minimal
+                  apt-get update -q && apt-get install -y gh curl python3
                   [ -f /creds/tokens.env ] && . /creds/tokens.env
                   set -eu
                   COMPONENT="{{ .name }}"
