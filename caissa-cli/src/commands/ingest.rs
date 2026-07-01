@@ -166,15 +166,35 @@ Output only the summary, no preamble."#,
         readme = readme.chars().take(8000).collect::<String>(),
     );
 
-    let output = tokio::process::Command::new("claude")
-        .args([
-            "--print",
-            &prompt,
-            "--model",
-            "claude-haiku-4-5-20251001",
-        ])
-        .output()
-        .await?;
+    let model = "claude-haiku-4-5-20251001"; // TODO: make configurable like chronicle_model, support grok*
+
+    let output = if model.starts_with("grok") || model.starts_with("xai") {
+        // basic grok for ingest
+        let api_key = std::env::var("XAI_API_KEY")?;
+        let client = reqwest::Client::new();
+        let body = serde_json::json!({
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}]
+        });
+        let resp = client.post("https://api.x.ai/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", api_key))
+            .json(&body)
+            .send().await?.error_for_status()?;
+        let j: serde_json::Value = resp.json().await?;
+        let text = j["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string();
+        // simulate output
+        tokio::process::Command::new("echo").arg(&text).output().await?
+    } else {
+        tokio::process::Command::new("claude")
+            .args([
+                "--print",
+                &prompt,
+                "--model",
+                model,
+            ])
+            .output()
+            .await?
+    };
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

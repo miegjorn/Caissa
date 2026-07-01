@@ -19,14 +19,16 @@ dispatcher_mcp_url = "http://dispatcher.agents.svc.cluster.local:9090/mcp"
 # registry = "ghcr.io/miegjorn"
 
 # Model overrides (optional — defaults shown).
-# chronicle_model = "claude-haiku-4-5"   # routine observation; cheapest
+# chronicle_model = "claude-haiku-4-5-20251001"   # routine observation; cheapest
 # matrix_model    = "claude-sonnet-4-6"  # interactive Matrix replies
 # dream_model     = "claude-sonnet-4-6"  # nightly dream synthesis; Sonnet is appropriate
 #
 # For complementary multi-model runs (Anthropic + Grok together, dynamic per-stance/participant):
-# set e.g. matrix_model = "grok-3" and configure the participant in Amassada canvas to use endpoint
-# pointing at a Grok-backed service. Direct Anthropic path remains for claude* models.
+# set e.g. chronicle_model = "grok-3" or dream_model = "grok-3"
+# For full agentic with tools/MCP for Grok, use Amassada canvas with model + endpoint to a Grok service.
+# Direct Anthropic path remains for claude* models.
 # See dispatch guard in Amassada and model in Fondament definitions.
+# The component agent for nervi (and others) will use the default_model from its Fondament def if set.
 
 [sandbox]
 image = "caissa-sandbox:latest"

@@ -488,41 +488,72 @@ instance) to understand where the stack stands.
 }
 
 async fn run_chronicle(state: &ListenState, prompt: &str) -> anyhow::Result<()> {
-    // Attach the Farga MCP server so Claude reads live state via tools instead of
-    // shelling out (its bash tools are gated in headless --print runs). Only the read
-    // tools are allowed — writes go through caissa's post_signal below.
-    let mcp_config = format!(
-        r#"{{"mcpServers":{{"farga":{{"type":"http","url":"{}"}}}}}}"#,
-        state.farga_mcp_url
-    );
-    let mcp_path = std::env::temp_dir().join("guilhem-mcp.json");
-    std::fs::write(&mcp_path, &mcp_config)?;
+    let model = &state.chronicle_model;
 
-    let output = tokio::process::Command::new("claude")
-        .args([
-            "--print",
-            prompt,
-            "--model",
-            &state.chronicle_model,
-            "--mcp-config",
-            mcp_path.to_str().unwrap(),
-            "--allowed-tools",
-            "mcp__farga__search_signals,mcp__farga__read_context,mcp__farga__list_projects,mcp__farga__update_component_todo",
-        ])
-        .env("FARGA_URL", &state.farga_url)
-        .env("FARGA_PROJECT", &state.farga_project)
-        .output()
-        .await?;
+    if model.starts_with("grok") || model.starts_with("xai") {
+        // Basic Grok path for complementary support
+        let api_key = std::env::var("XAI_API_KEY")
+            .map_err(|_| anyhow::anyhow!("XAI_API_KEY not set for grok chronicle model"))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("claude exited with error: {}", stderr);
-    }
+        let client = reqwest::Client::new();
+        let body = serde_json::json!({
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}]
+        });
 
-    let chronicle = String::from_utf8_lossy(&output.stdout).to_string();
+        let resp = client
+            .post("https://api.x.ai/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?;
 
-    if !chronicle.trim().is_empty() {
-        post_signal(state, &chronicle).await?;
+        let resp_json: serde_json::Value = resp.json().await?;
+        let response = resp_json["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
+        if !response.trim().is_empty() {
+            post_signal(state, &response).await?;
+        }
+    } else {
+        // Claude path with MCP
+        let mcp_config = format!(
+            r#"{{"mcpServers":{{"farga":{{"type":"http","url":"{}"}}}}}}"#,
+            state.farga_mcp_url
+        );
+        let mcp_path = std::env::temp_dir().join("guilhem-mcp.json");
+        std::fs::write(&mcp_path, &mcp_config)?;
+
+        let output = tokio::process::Command::new("claude")
+            .args([
+                "--print",
+                prompt,
+                "--model",
+                model,
+                "--mcp-config",
+                mcp_path.to_str().unwrap(),
+                "--allowed-tools",
+                "mcp__farga__search_signals,mcp__farga__read_context,mcp__farga__list_projects,mcp__farga__update_component_todo",
+            ])
+            .env("FARGA_URL", &state.farga_url)
+            .env("FARGA_PROJECT", &state.farga_project)
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("claude exited with error: {}", stderr);
+        }
+
+        let response = String::from_utf8_lossy(&output.stdout).to_string();
+
+        if !response.trim().is_empty() {
+            post_signal(state, &response).await?;
+        }
     }
 
     Ok(())
@@ -557,40 +588,61 @@ async fn run_backlog_review(state: &ListenState) -> anyhow::Result<()> {
         state.farga_mcp_url
     );
     let mcp_path = std::env::temp_dir().join("guilhem-backlog-mcp.json");
-    std::fs::write(&mcp_path, &mcp_config)?;
 
+    let model = &state.matrix_model;
     let prompt = build_backlog_review_prompt(&state.fondament_path, &state.farga_project);
+    let review: String;
 
-    let output = tokio::process::Command::new("claude")
-        .args([
-            "--print",
-            &prompt,
-            "--model",
-            &state.matrix_model,
-            "--mcp-config",
-            mcp_path.to_str().unwrap(),
-            "--allowed-tools",
-            "Bash,mcp__farga__search_signals,mcp__farga__read_context,mcp__farga__write_signal",
-        ])
-        .env("FARGA_URL", &state.farga_url)
-        .env("FARGA_PROJECT", &state.farga_project)
-        .output()
-        .await?;
+    if model.starts_with("grok") || model.starts_with("xai") {
+        let api_key = std::env::var("XAI_API_KEY").map_err(|_| anyhow::anyhow!("XAI_API_KEY for grok"))?;
+        let client = reqwest::Client::new();
+        let body = serde_json::json!({
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}]
+        });
+        let resp = client.post("https://api.x.ai/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", api_key))
+            .json(&body)
+            .send().await?.error_for_status()?;
+        let j: serde_json::Value = resp.json().await?;
+        review = j["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string();
+        if review.trim().is_empty() {
+            tracing::warn!("backlog-review: empty from grok");
+            return Ok(());
+        }
+        post_signal(state, &review).await?;
+    } else {
+        std::fs::write(&mcp_path, &mcp_config)?;
+        let output = tokio::process::Command::new("claude")
+            .args([
+                "--print",
+                &prompt,
+                "--model",
+                model,
+                "--mcp-config",
+                mcp_path.to_str().unwrap(),
+                "--allowed-tools",
+                "Bash,mcp__farga__search_signals,mcp__farga__read_context,mcp__farga__write_signal",
+            ])
+            .env("FARGA_URL", &state.farga_url)
+            .env("FARGA_PROJECT", &state.farga_project)
+            .output()
+            .await?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("backlog-review claude exited with error: {}", stderr);
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("backlog-review claude exited with error: {}", stderr);
+        }
+
+        review = String::from_utf8_lossy(&output.stdout).to_string();
+
+        if review.trim().is_empty() {
+            tracing::warn!("backlog-review: empty output from claude");
+            return Ok(());
+        }
+        post_signal(state, &review).await?;
     }
 
-    let review = String::from_utf8_lossy(&output.stdout).to_string();
-
-    if review.trim().is_empty() {
-        tracing::warn!("backlog-review: empty output from claude");
-        return Ok(());
-    }
-
-    // Write to Farga
-    post_signal(state, &review).await?;
     tracing::info!("backlog-review written to Farga");
 
     // Post to Matrix if configured
@@ -2143,42 +2195,88 @@ fn component_allowed_tools(fondament_path: &str, component: &str) -> Vec<String>
     ]
 }
 
-/// Invoke Claude as the component agent orchestrator for a batch of Nervi messages.
+/// Invoke the component agent orchestrator for a batch of Nervi messages.
+/// Supports complementary models: claude* via claude CLI (full MCP/tools),
+/// grok* via basic xAI API (no MCP/tools in basic path; use endpoint for full agentic).
 async fn run_component_agent(state: &ListenState, component: &str, payload: &str) -> anyhow::Result<()> {
-    let mcp_config = serde_json::to_string(&serde_json::json!({
-        "mcpServers": component_mcp_servers(state)
-    }))?;
-    let mcp_path = std::env::temp_dir().join(format!("{component}-agent-mcp.json"));
-    std::fs::write(&mcp_path, &mcp_config)?;
+    let def_name = format!("{component}-agent");
+    let effective_model = match load_fondament_def(&state.fondament_path, &def_name) {
+        Ok(def) => def.default_model.unwrap_or_else(|| state.chronicle_model.clone()),
+        Err(_) => state.chronicle_model.clone(),
+    };
 
     let persona_context = load_component_persona(state, component);
     let prompt = build_component_agent_prompt(component, &state.farga_project, payload, &persona_context);
-    let tools = component_allowed_tools(&state.fondament_path, component).join(",");
 
-    let output = tokio::process::Command::new("claude")
-        .args([
-            "--print",
-            &prompt,
-            "--model",
-            &state.chronicle_model,
-            "--mcp-config",
-            mcp_path.to_str().unwrap(),
-            "--allowed-tools",
-            &tools,
-        ])
-        .env("FARGA_URL", &state.farga_url)
-        .env("FARGA_PROJECT", &state.farga_project)
-        .output()
-        .await?;
+    if effective_model.starts_with("grok") || effective_model.starts_with("xai") {
+        // Basic Grok path for complementary support. No MCP/tool loop in this path.
+        // For full agentic with tools for Grok, configure the component participant in Amassada
+        // canvas to use an endpoint pointing at a Grok-backed service.
+        let api_key = std::env::var("XAI_API_KEY")
+            .map_err(|_| anyhow::anyhow!("XAI_API_KEY not set for grok model in component agent"))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("component agent exited non-zero: {stderr}");
-    }
+        let client = reqwest::Client::new();
+        let body = serde_json::json!({
+            "model": effective_model,
+            "messages": [
+                {"role": "system", "content": persona_context},
+                {"role": "user", "content": prompt}
+            ]
+        });
 
-    let response = String::from_utf8_lossy(&output.stdout).to_string();
-    if !response.trim().is_empty() {
-        post_signal(state, &response).await?;
+        let resp = client
+            .post("https://api.x.ai/v1/chat/completions")
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let resp_json: serde_json::Value = resp.json().await?;
+        let response = resp_json["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
+        if !response.trim().is_empty() {
+            post_signal(state, &response).await?;
+        }
+    } else {
+        // Claude path (full MCP/tools support)
+        let mcp_config = serde_json::to_string(&serde_json::json!({
+            "mcpServers": component_mcp_servers(state)
+        }))?;
+        let mcp_path = std::env::temp_dir().join(format!("{component}-agent-mcp.json"));
+        std::fs::write(&mcp_path, &mcp_config)?;
+
+        let tools = component_allowed_tools(&state.fondament_path, component).join(",");
+
+        let output = tokio::process::Command::new("claude")
+            .args([
+                "--print",
+                &prompt,
+                "--model",
+                &effective_model,
+                "--mcp-config",
+                mcp_path.to_str().unwrap(),
+                "--allowed-tools",
+                &tools,
+            ])
+            .env("FARGA_URL", &state.farga_url)
+            .env("FARGA_PROJECT", &state.farga_project)
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("component agent exited non-zero: {stderr}");
+        }
+
+        let response = String::from_utf8_lossy(&output.stdout).to_string();
+        if !response.trim().is_empty() {
+            post_signal(state, &response).await?;
+        }
     }
     Ok(())
 }
