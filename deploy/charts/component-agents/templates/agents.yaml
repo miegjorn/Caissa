@@ -193,11 +193,12 @@ spec:
                   mountPath: /creds
           containers:
             - name: issue-sync
-              image: ghcr.io/cli/cli:latest
+              image: {{ $.Values.issueSyncImage }}
               imagePullPolicy: IfNotPresent
               command: ["/bin/sh", "-c"]
               args:
                 - |
+                  apt-get update -qq && apt-get install -y -qq gh curl 2>/dev/null || true
                   [ -f /creds/tokens.env ] && . /creds/tokens.env
                   set -eu
                   COMPONENT="{{ .name }}"
