@@ -54,14 +54,23 @@ mint_installation_token() {
   JWT_SIGNATURE=$(printf '%s' "$JWT_UNSIGNED" | openssl dgst -sha256 -sign "$PRIVATE_KEY_FILE" -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')
   JWT="${JWT_UNSIGNED}.${JWT_SIGNATURE}"
 
-  INSTALL_TOKEN=$(curl -sf -X POST \
+  RESP_FILE=/tmp/gh-app-token-resp.json
+  HTTP_CODE=$(curl -s -o "$RESP_FILE" -w '%{http_code}' -X POST \
     -H "Authorization: Bearer ${JWT}" \
     -H "Accept: application/vnd.github+json" \
-    "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" \
-    | python3 -c 'import sys, json; print(json.load(sys.stdin).get("token", ""))')
+    "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" || echo "000")
+
+  if [ "$HTTP_CODE" != "201" ]; then
+    echo "[entrypoint] failed to mint GitHub App installation token (HTTP ${HTTP_CODE})" >&2
+    rm -f "$RESP_FILE"
+    return 1
+  fi
+
+  INSTALL_TOKEN=$(python3 -c 'import sys, json; print(json.load(sys.stdin).get("token", ""))' < "$RESP_FILE" 2>/dev/null || echo "")
+  rm -f "$RESP_FILE"
 
   if [ -z "$INSTALL_TOKEN" ]; then
-    echo "[entrypoint] failed to mint GitHub App installation token" >&2
+    echo "[entrypoint] failed to parse GitHub App installation token response" >&2
     return 1
   fi
 
@@ -126,7 +135,9 @@ if [ -n "${TASK:-}" ]; then
   # container ran (it always does for dispatched agent Jobs — see
   # build_job in caissa-cli/src/commands/dispatch.rs).
   [ -f /creds/tokens.env ] && . /creds/tokens.env
-  [ -f /creds/github-app-id ] && mint_installation_token
+  if [ -f /creds/github-app-id ]; then
+    mint_installation_token || echo "[entrypoint] continuing without a fresh GitHub token" >&2
+  fi
   export GIT_CONFIG_GLOBAL=/creds/.gitconfig
 
   # Run the task non-interactively, capture output. --mcp-config connects
@@ -223,12 +234,14 @@ else
   # ── Interactive mode ───────────────────────────────────────────────────────
   [ -f /creds/tokens.env ] && . /creds/tokens.env
   if [ -f /creds/github-app-id ]; then
-    mint_installation_token
+    mint_installation_token || echo "[entrypoint] continuing without a fresh GitHub token" >&2
     # Refresh every 45 minutes (installation tokens expire after 1h). This
     # rewrites /creds/tokens.env; BASH_ENV below makes each freshly-spawned
     # bash subshell (i.e. every Bash tool call claude makes) re-read it, so
-    # long sessions don't run on a stale token past the 1h mark.
-    (while true; do sleep 2700; mint_installation_token; done) &
+    # long sessions don't run on a stale token past the 1h mark. The `||`
+    # fallback ensures a single failed mint never trips `set -e` (inherited
+    # into this backgrounded subshell) and silently kills the refresh loop.
+    (while true; do sleep 2700; mint_installation_token || echo "[entrypoint] token refresh failed, will retry next cycle" >&2; done) &
     export BASH_ENV=/creds/tokens.env
   fi
   export GIT_CONFIG_GLOBAL=/creds/.gitconfig
