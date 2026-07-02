@@ -77,31 +77,36 @@ jobs:
     permissions:
       contents: write
       packages: write
+    # caissa-core → amassada-core → fondament-core (transitive Cargo path
+    # deps, not just the --fondament-path CLI flag below) need Fondament and
+    # Amassada as true sibling directories of this checkout, not subdirectories
+    # of it — actions/checkout@v4 refuses a path outside $GITHUB_WORKSPACE
+    # (path: ../X errors with "is not under ..."), so instead this checks out
+    # all three repos as explicit siblings under $GITHUB_WORKSPACE (GitHub's
+    # own documented "checkout multiple repos side by side" pattern) and runs
+    # every step from inside the Caissa checkout via this default.
+    defaults:
+      run:
+        working-directory: Caissa
     steps:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.MIEGJORN_CI_TOKEN }}
+          path: Caissa
 
-      # caissa-core → amassada-core → fondament-core (transitive path deps,
-      # resolved via real Cargo path dependencies, not just the --fondament-path
-      # CLI flag below). These must land as true sibling directories of this
-      # checkout, not subdirectories, for `cargo run --bin caissa` (run
-      # directly on the runner, no Docker) to resolve them the same way it
-      # does in local dev — hence path: ../Fondament / ../Amassada rather than
-      # a plain subdirectory name.
       - uses: actions/checkout@v4
         with:
           repository: miegjorn/Fondament
           token: ${{ secrets.MIEGJORN_CI_TOKEN }}
           ref: main
-          path: ../Fondament
+          path: Fondament
 
       - uses: actions/checkout@v4
         with:
           repository: miegjorn/Amassada
           token: ${{ secrets.MIEGJORN_CI_TOKEN }}
           ref: main
-          path: ../Amassada
+          path: Amassada
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
 
