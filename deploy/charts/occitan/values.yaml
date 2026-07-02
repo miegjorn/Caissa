@@ -39,7 +39,7 @@ farga:
 # Canvases are baked into the image at /canvases/stdlib.
 amassada:
   image: ghcr.io/miegjorn/amassada
-  imageTag: sha-41871ee # CI writes sha-<sha> here on every main push
+  imageTag: sha-f77e8ae # CI writes sha-<sha> here on every main push
   replicas: 1
   port: 7600
   env:
