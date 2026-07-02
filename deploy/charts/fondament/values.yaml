@@ -6,4 +6,3 @@ fargaUrl: http://farga.occitan-system.svc.cluster.local:7500
 registryUrl: http://minio.occitan-system.svc.cluster.local:9000
 registryBucket: fondament-registry
 replicas: 1
-storage: 1Gi

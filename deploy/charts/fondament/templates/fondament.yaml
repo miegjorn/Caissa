@@ -1,20 +1,4 @@
 ---
-# PVC for fondament definitions.
-# Definitions are seeded by running: caissa fondament publish
-# (The publish command pushes definitions to MinIO; fondament-server pulls them from there.)
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: fondament-data
-  namespace: occitan-system
-  labels:
-    app: fondament
-spec:
-  accessModes: [ReadWriteOnce]
-  resources:
-    requests:
-      storage: {{ .Values.storage }}
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -24,8 +8,6 @@ metadata:
     app: fondament
 spec:
   replicas: {{ .Values.replicas }}
-  # Single writer for local definitions store — use Recreate to avoid two instances
-  # racing on the PVC during rollouts.
   strategy:
     type: Recreate
   selector:
@@ -76,19 +58,12 @@ spec:
               port: {{ .Values.port }}
             initialDelaySeconds: 5
             periodSeconds: 10
-          volumeMounts:
-            - name: data
-              mountPath: {{ .Values.definitionsPath }}
           resources:
             requests:
               cpu: 50m
               memory: 64Mi
             limits:
               memory: 256Mi
-      volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: fondament-data
 ---
 apiVersion: v1
 kind: Service
