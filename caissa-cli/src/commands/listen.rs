@@ -497,41 +497,6 @@ fn html_differs_from_plain(plain: &str, html: &str) -> bool {
     unwrapped != plain.trim()
 }
 
-/// Extract all ` ```mermaid ... ``` ` code blocks from a reply, returning
-/// `(text_with_blocks_removed, diagram_sources)`. Ported from
-/// `Charradissa/charradissa-core/src/mermaid.rs`'s `extract_mermaid_blocks`,
-/// extended to also strip the blocks from the text (Charradissa's own hook
-/// left the raw text alone and posted the image as a side-effect; here we
-/// replace the raw diagram source with the rendered image instead of posting
-/// both).
-fn extract_and_strip_mermaid_blocks(content: &str) -> (String, Vec<String>) {
-    let mut diagrams = Vec::new();
-    let mut remaining = String::new();
-    let open = "```mermaid";
-    let close = "```";
-    let mut rest = content;
-    while let Some(start) = rest.find(open) {
-        remaining.push_str(&rest[..start]);
-        let after_open = &rest[start + open.len()..];
-        let body = after_open.trim_start_matches('\n').trim_start_matches('\r');
-        if let Some(end) = body.find(close) {
-            let diagram = body[..end].trim();
-            if !diagram.is_empty() {
-                diagrams.push(diagram.to_string());
-            }
-            rest = &body[end + close.len()..];
-        } else {
-            // Unterminated block — leave the rest of the content as-is rather
-            // than silently dropping it.
-            remaining.push_str(&rest[start..]);
-            rest = "";
-            break;
-        }
-    }
-    remaining.push_str(rest);
-    (remaining.trim().to_string(), diagrams)
-}
-
 /// POST the diagram source to Kroki and return the rendered PNG bytes.
 /// Ported from `Charradissa/charradissa-core/src/mermaid.rs`'s `render_svg`,
 /// requesting `png` instead of `svg` — Element renders inline images more
@@ -568,45 +533,62 @@ async fn matrix_upload_media(homeserver: &str, token: &str, content_type: &str, 
         .ok_or_else(|| anyhow::anyhow!("upload_media: no content_uri in response: {:?}", json))
 }
 
-async fn matrix_send_image(homeserver: &str, token: &str, room_id: &str, mxc_uri: &str, filename: &str) -> anyhow::Result<()> {
-    let body = serde_json::json!({
-        "msgtype": "m.image",
-        "body": filename,
-        "url": mxc_uri,
-        "info": { "mimetype": "image/png" },
-    });
-    matrix_post_body(homeserver, token, room_id, &body).await
+async fn render_and_upload_diagram(homeserver: &str, token: &str, kroki_url: &str, diagram: &str) -> anyhow::Result<String> {
+    let png = render_diagram_png(kroki_url, diagram).await?;
+    matrix_upload_media(homeserver, token, "image/png", png).await
 }
 
-/// Post an agent's reply with markdown rendering and mermaid-diagram
-/// interception: any ` ```mermaid ` blocks are rendered via Kroki and posted
-/// as PNG images (via a real Matrix media upload) in place of the raw
-/// diagram source; whatever text remains (if any) is posted separately with
-/// markdown → HTML rendering. Diagram rendering is best-effort — a Kroki
-/// failure logs a warning and falls back to posting the raw diagram source
-/// as part of the text, so a Kroki outage never swallows a reply.
-async fn post_reply(homeserver: &str, token: &str, room_id: &str, kroki_url: &str, reply: &str) -> anyhow::Result<()> {
-    let (mut text, diagrams) = extract_and_strip_mermaid_blocks(reply);
-
-    for (i, diagram) in diagrams.iter().enumerate() {
-        match render_diagram_png(kroki_url, diagram).await {
-            Ok(png) => {
-                let mxc = matrix_upload_media(homeserver, token, "image/png", png).await?;
-                let filename = if diagrams.len() == 1 { "diagram.png".to_string() } else { format!("diagram-{}.png", i + 1) };
-                matrix_send_image(homeserver, token, room_id, &mxc, &filename).await?;
-            }
-            Err(e) => {
-                tracing::warn!("post_reply: kroki render failed for diagram {} (falling back to raw source in text): {}", i + 1, e);
-                if !text.is_empty() {
-                    text.push_str("\n\n");
+/// Walk `content`, replacing each ` ```mermaid ... ``` ` block *in place*
+/// with a markdown image reference (`![diagram N](mxc://...)`) pointing at
+/// a real Matrix-uploaded PNG — so once the result is markdown-rendered, the
+/// image lands inline in the HTML exactly where the diagram was written,
+/// not as a separate trailing message. Per-diagram failure is non-fatal:
+/// that specific block is left as its raw mermaid source (still readable as
+/// a fenced code block) rather than losing the rest of the reply.
+async fn substitute_mermaid_with_images(homeserver: &str, token: &str, kroki_url: &str, content: &str) -> String {
+    let open = "```mermaid";
+    let close = "```";
+    let mut out = String::new();
+    let mut rest = content;
+    let mut diagram_num = 0usize;
+    while let Some(start) = rest.find(open) {
+        out.push_str(&rest[..start]);
+        let after_open = &rest[start + open.len()..];
+        let body = after_open.trim_start_matches('\n').trim_start_matches('\r');
+        if let Some(end) = body.find(close) {
+            let diagram = body[..end].trim();
+            if !diagram.is_empty() {
+                diagram_num += 1;
+                match render_and_upload_diagram(homeserver, token, kroki_url, diagram).await {
+                    Ok(mxc) => out.push_str(&format!("![diagram {}]({})", diagram_num, mxc)),
+                    Err(e) => {
+                        tracing::warn!("post_reply: kroki render/upload failed for diagram {} (leaving raw source in place): {}", diagram_num, e);
+                        out.push_str(&format!("```mermaid\n{}\n```", diagram));
+                    }
                 }
-                text.push_str(&format!("```mermaid\n{}\n```", diagram));
             }
+            rest = &body[end + close.len()..];
+        } else {
+            // Unterminated block — leave the rest of the content as-is rather
+            // than silently dropping it.
+            out.push_str(&rest[start..]);
+            rest = "";
+            break;
         }
     }
+    out.push_str(rest);
+    out
+}
 
-    if !text.is_empty() {
-        matrix_post_body(homeserver, token, room_id, &markdown_body(&text)).await?;
+/// Post an agent's reply with markdown rendering and inline mermaid-diagram
+/// interception: any ` ```mermaid ` blocks are rendered via Kroki, uploaded
+/// as real Matrix media, and substituted in place with a markdown image
+/// reference — so the rendered HTML shows the diagram inline exactly where
+/// the agent wrote it, in the same single message as the surrounding text.
+async fn post_reply(homeserver: &str, token: &str, room_id: &str, kroki_url: &str, reply: &str) -> anyhow::Result<()> {
+    let substituted = substitute_mermaid_with_images(homeserver, token, kroki_url, reply).await;
+    if !substituted.trim().is_empty() {
+        matrix_post_body(homeserver, token, room_id, &markdown_body(&substituted)).await?;
     }
     Ok(())
 }
@@ -631,42 +613,82 @@ mod matrix_rendering_tests {
         assert_eq!(body["body"], "**bold** text");
     }
 
-    #[test]
-    fn extracts_single_mermaid_block_and_strips_it() {
+    #[tokio::test]
+    async fn substitute_replaces_block_in_place_with_inline_image_ref() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::matchers::{method, path};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/mermaid/png"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0x89, b'P', b'N', b'G']))
+            .mount(&mock_server).await;
+        Mock::given(method("POST")).and(path("/_matrix/media/v3/upload"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "content_uri": "mxc://occitane.guilhem/abc123"
+            })))
+            .mount(&mock_server).await;
+
         let msg = "look at this\n```mermaid\ngraph TD\n  A-->B\n```\ncool right?";
-        let (text, diagrams) = extract_and_strip_mermaid_blocks(msg);
-        assert_eq!(diagrams, vec!["graph TD\n  A-->B"]);
-        assert_eq!(text, "look at this\n\ncool right?");
+        let result = substitute_mermaid_with_images(&mock_server.uri(), "test-token", &mock_server.uri(), msg).await;
+
+        // Image reference lands exactly where the code block was, not
+        // appended/prepended — the surrounding text stays in place.
+        assert_eq!(result, "look at this\n![diagram 1](mxc://occitane.guilhem/abc123)\ncool right?");
     }
 
-    #[test]
-    fn extracts_multiple_mermaid_blocks() {
+    #[tokio::test]
+    async fn substitute_numbers_multiple_diagrams_in_order() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::matchers::{method, path};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/mermaid/png"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![1, 2, 3]))
+            .mount(&mock_server).await;
+        Mock::given(method("POST")).and(path("/_matrix/media/v3/upload"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "content_uri": "mxc://occitane.guilhem/xyz"
+            })))
+            .mount(&mock_server).await;
+
         let msg = "```mermaid\nflowchart LR\n  A-->B\n```\nand\n```mermaid\nsequenceDiagram\n  A->>B: hi\n```";
-        let (text, diagrams) = extract_and_strip_mermaid_blocks(msg);
-        assert_eq!(diagrams.len(), 2);
-        assert_eq!(text, "and");
+        let result = substitute_mermaid_with_images(&mock_server.uri(), "test-token", &mock_server.uri(), msg).await;
+        assert!(result.contains("![diagram 1](mxc://occitane.guilhem/xyz)"));
+        assert!(result.contains("![diagram 2](mxc://occitane.guilhem/xyz)"));
+        assert!(result.contains("and"));
     }
 
-    #[test]
-    fn ignores_non_mermaid_code_blocks() {
+    #[tokio::test]
+    async fn substitute_falls_back_to_raw_source_on_kroki_failure() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::matchers::{method, path};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/mermaid/png"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&mock_server).await;
+
+        let msg = "before\n```mermaid\ngraph TD\n  A-->B\n```\nafter";
+        let result = substitute_mermaid_with_images(&mock_server.uri(), "test-token", &mock_server.uri(), msg).await;
+
+        // Kroki outage must not swallow the reply — raw source stays in place.
+        assert!(result.contains("before"));
+        assert!(result.contains("```mermaid\ngraph TD\n  A-->B\n```"));
+        assert!(result.contains("after"));
+    }
+
+    #[tokio::test]
+    async fn substitute_ignores_non_mermaid_code_blocks() {
         let msg = "```rust\nfn main() {}\n```";
-        let (text, diagrams) = extract_and_strip_mermaid_blocks(msg);
-        assert!(diagrams.is_empty());
-        assert_eq!(text, msg);
+        // No mock server needed — a non-mermaid block never triggers a network call.
+        let result = substitute_mermaid_with_images("http://unused", "test-token", "http://unused", msg).await;
+        assert_eq!(result, msg);
     }
 
-    #[test]
-    fn plain_text_with_no_diagrams_passes_through_unchanged() {
-        let (text, diagrams) = extract_and_strip_mermaid_blocks("hello world");
-        assert!(diagrams.is_empty());
-        assert_eq!(text, "hello world");
-    }
-
-    #[test]
-    fn reply_that_is_only_a_diagram_leaves_empty_text() {
-        let (text, diagrams) = extract_and_strip_mermaid_blocks("```mermaid\ngraph TD\n  A-->B\n```");
-        assert_eq!(diagrams, vec!["graph TD\n  A-->B"]);
-        assert_eq!(text, "");
+    #[tokio::test]
+    async fn substitute_passes_through_plain_text_unchanged() {
+        let result = substitute_mermaid_with_images("http://unused", "test-token", "http://unused", "hello world").await;
+        assert_eq!(result, "hello world");
     }
 }
 
