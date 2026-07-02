@@ -113,6 +113,36 @@ charradissa:
       # fallback from picking these rooms up regardless.
       routes: []
       # ANTHROPIC_API_KEY from 'anthropic' secret; MATRIX_AS_TOKEN from 'charradissa' secret.
+# ─── Valkey (Redis-compatible cache for Authentik) ────────────────────────────
+valkey:
+  enabled: true
+  image: valkey/valkey:7-alpine
+  memoryLimit: 256Mi
+# ─── Authentik (OIDC identity provider) ──────────────────────────────────────
+# Disabled by default — enable after:
+#   1. openBao is seeded with bootstrap credentials (scripts/init-openbao.sh)
+#   2. 'authentik' k8s Secret exists (secret-key, postgresql-password, bootstrap-password)
+#   3. 'synapse-oidc' k8s Secret exists (client-secret) — after Authentik setup
+#
+# Authentik → Gardian OIDC: uses internal URL (pod→pod, no ingress needed).
+# Authentik → Synapse OIDC: uses external URL (browser redirect — needs DNS/LoadBalancer).
+authentik:
+  enabled: false
+  image: ghcr.io/goauthentik/server
+  imageTag: "2024.12.2"
+  port: 9000
+  # External URL for Synapse OIDC (browser-side). Requires DNS or /etc/hosts on client.
+  # For kind + metallb: set to http://<metallb-LB-IP>:9000
+  externalUrl: "http://occitane.guilhem:9000"
+  postgresql:
+    database: authentik
+    user: authentik
+    # Password: must match 'authentik' k8s Secret key 'postgresql-password'.
+    # Not a production secret — override per environment.
+    password: authentik
+  # OAuth2 application slugs (set after creating applications in Authentik UI)
+  gardianClientId: "gardian"
+  synapseClientId: "synapse"
 # ─── Synapse (Matrix homeserver) ─────────────────────────────────────────────
 synapse:
   image: matrixdotorg/synapse:latest
