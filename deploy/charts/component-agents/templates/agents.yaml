@@ -91,7 +91,9 @@ spec:
       containers:
         - name: {{ .name }}-agent
           image: {{ $.Values.image }}
-          imagePullPolicy: Always
+          # $.Values.image is sha-tagged (immutable) — IfNotPresent avoids a
+          # redundant registry round-trip on every rollout.
+          imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c"]
           args:
             - |
@@ -367,7 +369,7 @@ spec:
           containers:
             - name: ingest
               image: {{ $.Values.image }}
-              imagePullPolicy: Always
+              imagePullPolicy: IfNotPresent
               command: ["/bin/sh", "-c"]
               args:
                 - |

@@ -41,7 +41,10 @@ spec:
       containers:
         - name: fondament-server
           image: "{{ .Values.image }}:{{ .Values.imageTag }}"
-          imagePullPolicy: Always
+          # imageTag is now sha-pinned by build.yml's update-caissa job on
+          # every push to Fondament main (see 2026-07-02 fix) — IfNotPresent
+          # avoids a redundant registry round-trip on every rollout.
+          imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: {{ .Values.port }}

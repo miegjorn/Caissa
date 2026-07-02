@@ -245,7 +245,10 @@ spec:
       containers:
         - name: guilhem
           image: {{ .Values.image }}
-          imagePullPolicy: Always
+          # .Values.image is sha-tagged (immutable) — IfNotPresent avoids a
+          # redundant registry round-trip on every rollout. Always is only
+          # correct for a floating tag like caissaImage's :latest below.
+          imagePullPolicy: IfNotPresent
           # Webhook listener — accepts POST /trigger/chronicle from Argo Workflows.
           # Wrapper sources the OpenBao-provided tokens and points git at the shared
           # gitconfig, then exec's the listener so claude inherits the credentials.
