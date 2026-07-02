@@ -5,10 +5,25 @@
 //! For each agent: registers a Matrix user via Synapse's shared-secret admin
 //! registration (treats "already registered" as success), generates and
 //! stores a password in OpenBao on first registration (read back on later
-//! runs so re-running never rotates an in-use password), and force-joins
-//! that user into its designated room using a short-lived admin token minted
-//! the same way. Finally kicks `@charradissa-relay` from every component
-//! room it's a member of (idempotent — checks membership first).
+//! runs so re-running never rotates an in-use password).
+//!
+//! Room membership does NOT use Synapse's admin "force join" API
+//! (`/_synapse/admin/v1/join`) — confirmed live that it does not bypass a
+//! local room's own `join_rules: invite` (that admin capability is for
+//! joining *federated* rooms an admin couldn't otherwise reach, not for
+//! overriding local auth rules — attempting it produces a genuine Matrix
+//! auth-chain rejection: "Denying new event ... because ... not in room").
+//! Instead this uses the standard Matrix flow: `@charradissa-relay` (already
+//! a member of every one of these 9 rooms) invites each agent using its own
+//! appservice token, then each agent logs in with its own just-registered
+//! password and joins normally — both steps are idempotent per the Matrix
+//! spec (inviting an already-joined user errors harmlessly; joining an
+//! already-joined room just succeeds).
+//!
+//! Finally, `@charradissa-relay` leaves every component room it's still in
+//! (a self-leave needs no elevated power at all, unlike a kick) — checked
+//! against its own current `joined_rooms` first, so this is a no-op on
+//! reruns once it's already left.
 //!
 //! Deliberately stores passwords, not access tokens: a token can go stale
 //! after a Matrix reset in a way a stored password can't (each agent's own
@@ -36,10 +51,6 @@ pub const AGENTS: &[(&str, &str)] = &[
 /// from these if present.
 fn component_rooms() -> impl Iterator<Item = &'static (&'static str, &'static str)> {
     AGENTS.iter().filter(|(name, _)| *name != "guilhem")
-}
-
-fn server_name(homeserver_room_suffix: &str) -> &str {
-    homeserver_room_suffix
 }
 
 /// Compute the HMAC-SHA1 MAC for Synapse's shared-secret registration API,
@@ -243,90 +254,82 @@ async fn register_user(client: &reqwest::Client, homeserver: &str, shared_secret
     anyhow::bail!("register_user {} failed: {:?}", username, body);
 }
 
-/// Mint a short-lived admin session via the same shared-secret mechanism
-/// (registers a throwaway admin user, logs in, returns the token). The
-/// caller is responsible for deactivating it when done.
-async fn mint_admin_session(client: &reqwest::Client, homeserver: &str, shared_secret: &str) -> anyhow::Result<(String, String)> {
-    // std::process::id() is a poor uniqueness source here: it's almost always
-    // PID 1 inside a container, so every retry of this Job would collide on
-    // the exact same username as a prior attempt's leftover (never-deactivated,
-    // because that attempt failed before reaching cleanup) admin account,
-    // and registration would fail with M_USER_IN_USE (unhandled here, unlike
-    // register_user's agent-registration path) rather than mint a fresh one.
-    // generate_password()'s own timestamp-seeded PRNG is unique enough per call.
-    let admin_user = format!("bootstrap-admin-{}", generate_password());
-    let admin_password = generate_password();
-    let nonce_resp: serde_json::Value = client
-        .get(format!("{}/_synapse/admin/v1/register", homeserver))
-        .send().await?
-        .json().await?;
-    let nonce = nonce_resp["nonce"].as_str()
-        .ok_or_else(|| anyhow::anyhow!("no nonce in registration response"))?;
-    let mac = registration_mac(shared_secret, nonce, &admin_user, &admin_password, true);
-    let reg: serde_json::Value = client
-        .post(format!("{}/_synapse/admin/v1/register", homeserver))
-        .json(&serde_json::json!({
-            "nonce": nonce, "username": admin_user, "password": admin_password,
-            "admin": true, "mac": mac,
-        }))
-        .send().await?
-        .json().await?;
-    let token = reg["access_token"].as_str()
-        .ok_or_else(|| anyhow::anyhow!("no access_token minting admin session"))?
-        .to_string();
-    Ok((format!("@{}:{}", admin_user, homeserver_server_name(homeserver)), token))
-}
-
-/// Best-effort: the server_name isn't always derivable from the homeserver URL,
-/// so callers that need it pass it explicitly where it matters (room ids already
-/// carry it). Used only for the throwaway admin user's own mxid in logs.
-fn homeserver_server_name(_homeserver: &str) -> &'static str {
-    "occitane.guilhem"
-}
-
-async fn force_join(client: &reqwest::Client, homeserver: &str, admin_token: &str, room_id: &str, user_id: &str) -> anyhow::Result<()> {
+/// Invite `user_id` into `room_id` as `@charradissa-relay` (the appservice's
+/// own sender identity — no `?user_id=` impersonation needed, since it's
+/// acting as itself, a real member of every one of these 9 rooms). Treated
+/// as best-effort by the caller: inviting an already-invited or
+/// already-joined user is a harmless no-op for the overall bootstrap (the
+/// subsequent self-join step succeeds either way), so failures here are
+/// logged, not propagated.
+async fn matrix_invite(client: &reqwest::Client, homeserver: &str, as_token: &str, room_id: &str, user_id: &str) -> anyhow::Result<()> {
     let resp = client
-        .post(format!("{}/_synapse/admin/v1/join/{}", homeserver, urlencode(room_id)))
-        .header("Authorization", format!("Bearer {}", admin_token))
+        .post(format!("{}/_matrix/client/v3/rooms/{}/invite", homeserver, urlencode(room_id)))
+        .header("Authorization", format!("Bearer {}", as_token))
         .json(&serde_json::json!({ "user_id": user_id }))
         .send().await?;
     if !resp.status().is_success() {
-        anyhow::bail!("force_join {} into {} failed: {}", user_id, room_id, resp.status());
+        anyhow::bail!("invite {} into {} failed: {}", user_id, room_id, resp.status());
     }
     Ok(())
 }
 
-async fn room_members(client: &reqwest::Client, homeserver: &str, admin_token: &str, room_id: &str) -> anyhow::Result<Vec<String>> {
+/// Log in as `username` with its own password — the same login path each
+/// agent's own `caissa listen` process uses at startup (see `matrix_login`
+/// in `commands/listen.rs`).
+async fn matrix_login(client: &reqwest::Client, homeserver: &str, username: &str, password: &str) -> anyhow::Result<String> {
     let resp: serde_json::Value = client
-        .get(format!("{}/_synapse/admin/v1/rooms/{}/members", homeserver, urlencode(room_id)))
-        .header("Authorization", format!("Bearer {}", admin_token))
+        .post(format!("{}/_matrix/client/v3/login", homeserver))
+        .json(&serde_json::json!({
+            "type": "m.login.password",
+            "identifier": { "type": "m.id.user", "user": username },
+            "password": password,
+        }))
         .send().await?
         .json().await?;
-    Ok(resp["members"].as_array()
+    resp["access_token"].as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow::anyhow!("matrix_login {} failed: no access_token in response: {:?}", username, resp))
+}
+
+/// Join `room_id` using the agent's own token. Idempotent per the Matrix
+/// spec — joining a room the caller is already in just succeeds again.
+async fn matrix_join(client: &reqwest::Client, homeserver: &str, token: &str, room_id: &str) -> anyhow::Result<()> {
+    let resp = client
+        .post(format!("{}/_matrix/client/v3/join/{}", homeserver, urlencode(room_id)))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&serde_json::json!({}))
+        .send().await?;
+    if !resp.status().is_success() {
+        anyhow::bail!("join {} failed: {}", room_id, resp.status());
+    }
+    Ok(())
+}
+
+/// The room IDs `@charradissa-relay` is currently a member of, using its own
+/// appservice token — no admin capability needed, this is just the normal
+/// "list my own joined rooms" endpoint.
+async fn matrix_joined_rooms(client: &reqwest::Client, homeserver: &str, as_token: &str) -> anyhow::Result<Vec<String>> {
+    let resp: serde_json::Value = client
+        .get(format!("{}/_matrix/client/v3/joined_rooms", homeserver))
+        .header("Authorization", format!("Bearer {}", as_token))
+        .send().await?
+        .json().await?;
+    Ok(resp["joined_rooms"].as_array()
         .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default())
 }
 
-async fn kick(client: &reqwest::Client, homeserver: &str, admin_token: &str, room_id: &str, user_id: &str, reason: &str) -> anyhow::Result<()> {
+/// `@charradissa-relay` leaves `room_id` (a self-leave, using its own
+/// appservice token) — no elevated power needed, unlike kicking someone
+/// else. Only called for rooms it's confirmed to currently be a member of.
+async fn matrix_leave(client: &reqwest::Client, homeserver: &str, as_token: &str, room_id: &str) -> anyhow::Result<()> {
     let resp = client
-        .post(format!("{}/_matrix/client/v3/rooms/{}/kick", homeserver, urlencode(room_id)))
-        .header("Authorization", format!("Bearer {}", admin_token))
-        .json(&serde_json::json!({ "user_id": user_id, "reason": reason }))
+        .post(format!("{}/_matrix/client/v3/rooms/{}/leave", homeserver, urlencode(room_id)))
+        .header("Authorization", format!("Bearer {}", as_token))
+        .json(&serde_json::json!({}))
         .send().await?;
     if !resp.status().is_success() {
-        anyhow::bail!("kick {} from {} failed: {}", user_id, room_id, resp.status());
-    }
-    Ok(())
-}
-
-async fn deactivate(client: &reqwest::Client, homeserver: &str, admin_token: &str, user_id: &str) -> anyhow::Result<()> {
-    let resp = client
-        .post(format!("{}/_synapse/admin/v1/deactivate/{}", homeserver, urlencode(user_id)))
-        .header("Authorization", format!("Bearer {}", admin_token))
-        .json(&serde_json::json!({ "erase": true }))
-        .send().await?;
-    if !resp.status().is_success() {
-        anyhow::bail!("deactivate {} failed: {}", user_id, resp.status());
+        anyhow::bail!("leave {} failed: {}", room_id, resp.status());
     }
     Ok(())
 }
@@ -338,41 +341,50 @@ fn urlencode(s: &str) -> String {
     }).collect()
 }
 
-/// Full bootstrap: register the 9 agents, force-join each into its room,
-/// kick @charradissa-relay from the 8 component rooms if present. Safe to
-/// rerun — every step checks state before acting.
+/// Full bootstrap: register the 9 agents, invite+self-join each into its
+/// room, then have @charradissa-relay leave the 8 component rooms it's
+/// still in. Safe to rerun — every step is naturally idempotent or checks
+/// state before acting.
 pub async fn run(homeserver: &str, bao_addr: &str) -> anyhow::Result<()> {
     let bao_token = std::env::var("BAO_TOKEN")
         .map_err(|_| anyhow::anyhow!("BAO_TOKEN not set"))?;
     let shared_secret = std::env::var("SYNAPSE_REGISTRATION_SHARED_SECRET")
         .map_err(|_| anyhow::anyhow!("SYNAPSE_REGISTRATION_SHARED_SECRET not set"))?;
+    let charradissa_as_token = std::env::var("CHARRADISSA_AS_TOKEN")
+        .map_err(|_| anyhow::anyhow!("CHARRADISSA_AS_TOKEN not set"))?;
     let client = reqwest::Client::new();
 
+    let mut passwords = Vec::with_capacity(AGENTS.len());
     for (name, room_id) in AGENTS {
         let password = get_or_create_password(&client, bao_addr, &bao_token, name).await?;
         register_user(&client, homeserver, &shared_secret, name, &password).await?;
+        passwords.push((*name, *room_id, password));
     }
 
-    let (admin_mxid, admin_token) = mint_admin_session(&client, homeserver, &shared_secret).await?;
-    tracing::info!("bootstrap-matrix: minted throwaway admin session {}", admin_mxid);
-
-    for (name, room_id) in AGENTS {
-        let user_id = format!("@{}:{}", name, "occitane.guilhem");
-        force_join(&client, homeserver, &admin_token, room_id, &user_id).await?;
-        tracing::info!("bootstrap-matrix: {} joined {}", user_id, room_id);
-    }
-
-    let relay_id = "@charradissa-relay:occitane.guilhem";
-    for (name, room_id) in component_rooms() {
-        let members = room_members(&client, homeserver, &admin_token, room_id).await?;
-        if members.iter().any(|m| m == relay_id) {
-            kick(&client, homeserver, &admin_token, room_id, relay_id,
-                "component agents now run independent Matrix sessions — see Occitan#per-agent-matrix-independence").await?;
-            tracing::info!("bootstrap-matrix: kicked {} from {} ({})", relay_id, name, room_id);
+    for (name, room_id, _password) in &passwords {
+        let user_id = format!("@{}:occitane.guilhem", name);
+        // Best-effort: already-invited/already-joined errors are harmless —
+        // the self-join step below succeeds either way.
+        if let Err(e) = matrix_invite(&client, homeserver, &charradissa_as_token, room_id, &user_id).await {
+            tracing::warn!("bootstrap-matrix: invite {} into {} failed (continuing — may already be invited or joined): {}", user_id, room_id, e);
         }
     }
 
-    deactivate(&client, homeserver, &admin_token, &admin_mxid).await?;
-    tracing::info!("bootstrap-matrix: complete, throwaway admin session deactivated");
+    for (name, room_id, password) in &passwords {
+        let token = matrix_login(&client, homeserver, name, password).await?;
+        matrix_join(&client, homeserver, &token, room_id).await?;
+        tracing::info!("bootstrap-matrix: @{} joined {}", name, room_id);
+    }
+
+    let relay_id = "@charradissa-relay:occitane.guilhem";
+    let currently_joined = matrix_joined_rooms(&client, homeserver, &charradissa_as_token).await?;
+    for (name, room_id) in component_rooms() {
+        if currently_joined.iter().any(|r| r == room_id) {
+            matrix_leave(&client, homeserver, &charradissa_as_token, room_id).await?;
+            tracing::info!("bootstrap-matrix: {} left {} ({})", relay_id, name, room_id);
+        }
+    }
+
+    tracing::info!("bootstrap-matrix: complete");
     Ok(())
 }
