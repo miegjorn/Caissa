@@ -255,12 +255,20 @@ data:
          `gh pr review <url> --request-changes --body "<what to fix, why, specific line refs>"`
          Then send a Matrix message to the component's room describing what to change.
       5. Back-and-forth continues until your confidence is high.
-      6. Approve only when you can articulate: what the code does, why it is correct, and
-         that it does not violate any system-defence axiom.
-      7. On approval: `gh pr review <url> --approve --body "<what you validated>"`
+      6. Classify the PR's risk (Class 1-4, see system-defence.md) and check whether it
+         touches a CODEOWNERS-protected path (currently: any Helm/RBAC manifest under
+         Caissa/deploy/, any file under Fondament/definitions/fondament/, or any
+         .github/CODEOWNERS file).
+      7. Class 1/2, no protected path touched, and you can fully articulate what the code
+         does, why it is correct, and that it violates no system-defence axiom:
+         `gh pr review <url> --approve --body "<what you validated>"`
          Then: `gh pr merge <url> --squash`
-      8. If the PR is architectural (Class 3): use matrix_request_approval to surface to
-         the occitan-code-approval room before merging. Do not merge until Pierre-Luc approves.
+      8. Class 3/4, OR a protected path is touched, OR your confidence is not high enough
+         to fully articulate the change: you do NOT call `gh pr review --approve` or
+         `gh pr merge` under any circumstance. Call matrix_request_approval with a summary
+         of the diff and why it's escalated, and wait — the call blocks until Pierre-Luc
+         replies or it times out. On timeout or rejection, the PR stays open and unmerged;
+         do not retry the merge yourself. Pierre-Luc reviews and merges those PRs himself.
 
       Write a Farga signal after each merge: source="guilhem-review", content summarizing
       what was merged and why it was approved.
@@ -456,7 +464,7 @@ data:
     |-------|----------|--------|
     | 1 | Scoped to one component, reversible, no interface change | Dispatch autonomously |
     | 2 | Cross-component read, new internal API, ambiguous scope | Dispatch as draft; review |
-    | 3 | Public interface, new cross-component protocol, Fondament change | Escalate to Pierre-Luc |
+    | 3 | Public interface, new cross-component protocol, Fondament change | Escalate to Pierre-Luc; never approve/merge the PR yourself |
     | 4 | Violates axiom, ELOPe-shaped, removes approval gates | Reject; write Farga signal |
 
     When in doubt, escalate. The cost of an unnecessary escalation is a conversation.
@@ -521,20 +529,19 @@ spec:
             - |
               set -eu
               export BAO_ADDR=http://openbao.occitan-system.svc.cluster.local:8200
-              GH=$(bao kv get -field=value secret/occitan/github)
               GL=$(bao kv get -field=value secret/occitan/gitlab)
               SYNAPSE_ADMIN=$(bao kv get -field=token secret/occitan/synapse-admin-token)
               umask 077
+              bao kv get -field=value secret/occitan/github-app-id > /creds/github-app-id
+              bao kv get -field=value secret/occitan/github-app-installation-id > /creds/github-app-installation-id
+              bao kv get -field=value secret/occitan/github-app-private-key > /creds/github-app-private-key.pem
               cat > /creds/tokens.env <<EOF
-              export GH_TOKEN='$GH'
-              export GITHUB_TOKEN='$GH'
               export GITLAB_TOKEN='$GL'
               export GITLAB_PAT_TOKEN='$GL'
               export SYNAPSE_ADMIN_TOKEN='$SYNAPSE_ADMIN'
               export SYNAPSE_URL='http://synapse.occitan-system.svc.cluster.local:8008'
               EOF
               cat > /creds/.git-credentials <<EOF
-              https://x-access-token:$GH@github.com
               https://oauth2:$GL@gitlab.com
               EOF
               cat > /creds/.gitconfig <<'EOF'
@@ -545,6 +552,10 @@ spec:
                   email = guilhem@occitane.guilhem
               [safe]
                   directory = *
+              EOF
+              bao kv get -field=value secret/occitan/matrix/guilhem-password > /tmp/matrix-password 2>/dev/null || echo -n "" > /tmp/matrix-password
+              cat >> /creds/tokens.env <<EOF
+              export MATRIX_PASSWORD='$(cat /tmp/matrix-password)'
               EOF
               echo "tokens + git creds written to /creds"
           env:
@@ -563,10 +574,21 @@ spec:
           # Webhook listener — accepts POST /trigger/chronicle from Argo Workflows.
           # Wrapper sources the OpenBao-provided tokens and points git at the shared
           # gitconfig, then exec's the listener so claude inherits the credentials.
+          #
+          # caissa listen spawns a fresh `claude` subprocess per request rather than
+          # running one long-lived process, and each spawn reads GH_TOKEN/GITHUB_TOKEN
+          # fresh from /creds/tokens.env at call time (see github_token_envs() in
+          # caissa-cli/src/commands/listen.rs) — so the background refresh loop here
+          # only needs to keep that file current, not caissa's own process env.
           command: ["/bin/sh", "-c"]
           args:
             - |
               [ -f /creds/tokens.env ] && . /creds/tokens.env
+              . /usr/local/bin/mint-github-token.sh
+              if [ -f /creds/github-app-id ]; then
+                mint_installation_token || echo "[guilhem] continuing without a fresh GitHub token" >&2
+                (while true; do sleep 2700; mint_installation_token || echo "[guilhem] token refresh failed, will retry next cycle" >&2; done) &
+              fi
               export GIT_CONFIG_GLOBAL=/creds/.gitconfig
               export PATH="/tools:$PATH"
               exec caissa listen --port 8080
@@ -612,6 +634,14 @@ spec:
               value: {{ .Values.backlog.matrixRoomId | quote }}
             - name: DREAM_MATRIX_ROOM_ID
               value: {{ .Values.dream.matrixRoomId | quote }}
+            - name: MATRIX_USER
+              value: {{ .Values.matrix.user | quote }}
+            - name: MATRIX_ROOM_ID
+              value: {{ .Values.matrix.roomId | quote }}
+            - name: MATRIX_HOMESERVER
+              value: {{ .Values.matrix.homeserver | quote }}
+            - name: KROKI_URL
+              value: "http://kroki.occitan-system.svc.cluster.local:8000"
           volumeMounts:
             - name: caissa-config
               mountPath: /workspace/caissa.toml

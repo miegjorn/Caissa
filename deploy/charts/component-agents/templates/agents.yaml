@@ -64,14 +64,18 @@ spec:
             - |
               set -eu
               export BAO_ADDR=http://openbao.occitan-system.svc.cluster.local:8200
-              GH=$(bao kv get -field=value secret/occitan/github)
               GL=$(bao kv get -field=value secret/occitan/gitlab)
               umask 077
+              bao kv get -field=value secret/occitan/github-app-id > /creds/github-app-id
+              bao kv get -field=value secret/occitan/github-app-installation-id > /creds/github-app-installation-id
+              bao kv get -field=value secret/occitan/github-app-private-key > /creds/github-app-private-key.pem
               cat > /creds/tokens.env <<EOF
-              export GH_TOKEN='$GH'
-              export GITHUB_TOKEN='$GH'
               export GITLAB_TOKEN='$GL'
               export GITLAB_PAT_TOKEN='$GL'
+              EOF
+              bao kv get -field=value secret/occitan/matrix/{{ .name }}-password > /tmp/matrix-password 2>/dev/null || echo -n "" > /tmp/matrix-password
+              cat >> /creds/tokens.env <<EOF
+              export MATRIX_PASSWORD='$(cat /tmp/matrix-password)'
               EOF
               echo "tokens written"
           env:
@@ -91,6 +95,11 @@ spec:
           args:
             - |
               [ -f /creds/tokens.env ] && . /creds/tokens.env
+              . /usr/local/bin/mint-github-token.sh
+              if [ -f /creds/github-app-id ]; then
+                mint_installation_token || echo "[{{ .name }}-agent] continuing without a fresh GitHub token" >&2
+                (while true; do sleep 2700; mint_installation_token || echo "[{{ .name }}-agent] token refresh failed, will retry next cycle" >&2; done) &
+              fi
               exec caissa listen --port 8080
           env:
             - name: FARGA_URL
@@ -102,6 +111,14 @@ spec:
                 secretKeyRef:
                   name: anthropic
                   key: api-key
+            - name: MATRIX_USER
+              value: {{ .name | quote }}
+            - name: MATRIX_ROOM_ID
+              value: {{ .roomId | quote }}
+            - name: MATRIX_HOMESERVER
+              value: "http://synapse.occitan-system.svc.cluster.local:8008"
+            - name: KROKI_URL
+              value: "http://kroki.occitan-system.svc.cluster.local:8000"
           volumeMounts:
             - name: caissa-config
               mountPath: /workspace/caissa.toml
@@ -175,12 +192,10 @@ spec:
                 - |
                   set -eu
                   export BAO_ADDR=http://openbao.occitan-system.svc.cluster.local:8200
-                  GH=$(bao kv get -field=value secret/occitan/github)
                   umask 077
-                  cat > /creds/tokens.env <<EOF
-                  export GH_TOKEN='$GH'
-                  export GITHUB_TOKEN='$GH'
-                  EOF
+                  bao kv get -field=value secret/occitan/github-app-id > /creds/github-app-id
+                  bao kv get -field=value secret/occitan/github-app-installation-id > /creds/github-app-installation-id
+                  bao kv get -field=value secret/occitan/github-app-private-key > /creds/github-app-private-key.pem
                   echo "tokens written"
               env:
                 - name: BAO_TOKEN
@@ -341,10 +356,10 @@ spec:
                 - |
                   set -eu
                   export BAO_ADDR=http://openbao.occitan-system.svc.cluster.local:8200
-                  GH=$(bao kv get -field=value secret/occitan/github)
                   umask 077
-                  echo "export GH_TOKEN='$GH'" > /creds/tokens.env
-                  echo "export GITHUB_TOKEN='$GH'" >> /creds/tokens.env
+                  bao kv get -field=value secret/occitan/github-app-id > /creds/github-app-id
+                  bao kv get -field=value secret/occitan/github-app-installation-id > /creds/github-app-installation-id
+                  bao kv get -field=value secret/occitan/github-app-private-key > /creds/github-app-private-key.pem
               env:
                 - name: BAO_TOKEN
                   valueFrom:
@@ -362,6 +377,8 @@ spec:
               args:
                 - |
                   [ -f /creds/tokens.env ] && . /creds/tokens.env
+                  . /usr/local/bin/mint-github-token.sh
+                  [ -f /creds/github-app-id ] && { mint_installation_token || echo "[ingest] continuing without a fresh GitHub token" >&2; }
                   exec caissa ingest --component {{ .name }}
               env:
                 - name: FARGA_URL

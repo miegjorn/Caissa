@@ -1,3 +1,4 @@
+pub mod bootstrap_matrix;
 pub mod build;
 pub mod dispatch;
 pub mod fondament;

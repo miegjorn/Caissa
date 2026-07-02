@@ -37,6 +37,18 @@ RUN set -eux; \
 # Install Claude Code
 RUN npm install -g @anthropic-ai/claude-code
 
+# This image has no USER directive — everything runs as root, and the Claude
+# CLI/SDK hard-refuses --dangerously-skip-permissions (and the SDK's
+# permissionMode: 'bypassPermissions') under root for safety, exiting
+# immediately with "cannot be used with root/sudo privileges for security
+# reasons". IS_SANDBOX=1 is the documented escape hatch for exactly this
+# already-isolated-container case. Without it, agent-sidecar.js's headless
+# claude-agent-sdk session hangs forever the first time Guilhem calls any
+# tool not already in --allowedTools, since there's no TTY to answer the
+# resulting permission prompt (root-caused via a direct curl to
+# /matrix/reply: a deterministic 25s+ hang, isolated to this process).
+ENV IS_SANDBOX=1
+
 # Agent SDK — used by agent-sidecar.js to hold persistent per-room Matrix
 # sessions open, instead of spawning a fresh claude --print process per
 # message. `npm install -g` only puts CLI binaries on PATH — it does NOT
@@ -83,6 +95,12 @@ RUN printf '{"permissions":{"allow":["Edit(/root/.claude/CLAUDE.md)","Write(/roo
 # and DISPATCHER_MCP_URL — defaults point to cluster-internal DNS.
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Shared GitHub App token-minting function — sourced by entrypoint.sh and by
+# the guilhem/component-agents chart wrappers that exec `caissa listen`/
+# `caissa ingest` directly, bypassing entrypoint.sh entirely.
+COPY mint-github-token.sh /usr/local/bin/mint-github-token.sh
+RUN chmod +x /usr/local/bin/mint-github-token.sh
 
 # Bake Fondament domain + role definitions into the image so agents can
 # read them at runtime to assemble context for sub-agent invocations.

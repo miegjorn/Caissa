@@ -1,7 +1,7 @@
 # Guilhem agent chart values.
 # Image is built by: caissa build guilhem
 
-image: ghcr.io/miegjorn/caissa-sandbox:guilhem-sha-b4ab637
+image: ghcr.io/miegjorn/caissa-sandbox:guilhem-sha-5201f33
 generation: guilhem
 # Lean CLI image for sidecars that only need the caissa binary (no agent sandbox).
 # CI keeps this current with every push to Caissa main.
@@ -42,6 +42,10 @@ dream:
   matrixRoomId: ""
   # Model for dream synthesis. Sonnet is appropriate — dream requires genuine reasoning.
   model: "claude-sonnet-4-6"
+matrix:
+  user: guilhem
+  roomId: "!hTNBZpYDxyvfcuralm:occitane.guilhem"
+  homeserver: "http://synapse.occitan-system.svc.cluster.local:8008"
 dispatch:
   # Post-dream dispatch — fires 1h after dream so Farga signals are ready.
   # Guilhem reads dream report + adversarial challenges and routes to component agents.

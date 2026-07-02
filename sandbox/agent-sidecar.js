@@ -9,6 +9,11 @@ function parseInitLine(line) {
     allowedTools: obj.allowedTools || [],
     skills: obj.skills || [],
     mcpServers: obj.mcpServers || {},
+    // Extended-thinking token budget for the aporia discipline. Absent
+    // (undefined) when the agent's Fondament definition doesn't declare the
+    // aporia modifier — omitted from the query() options in that case so
+    // extended thinking stays off exactly like before this was wired.
+    maxThinkingTokens: obj.maxThinkingTokens,
   };
 }
 
@@ -48,7 +53,19 @@ async function runLoop() {
         allowedTools: init.allowedTools,
         skills: init.skills,
         mcpServers: init.mcpServers,
+        // Without this, the SDK defaults permissionMode to 'default', which
+        // prompts for tool approval on every dangerous operation. There is no
+        // TTY attached to this headless sidecar to answer such a prompt, so
+        // the very first tool call (e.g. Guilhem's own persona-mandated
+        // list_context_nodes call on turn one) hangs the query() call forever.
+        // Root-caused via a direct curl to /matrix/reply (deterministic
+        // 25s+ hang, isolated to this process, no other component involved).
+        permissionMode: 'bypassPermissions',
+        allowDangerouslySkipPermissions: true,
       };
+      if (init.maxThinkingTokens !== undefined && init.maxThinkingTokens !== null) {
+        options.maxThinkingTokens = init.maxThinkingTokens;
+      }
       if (sessionId) {
         options.resume = sessionId;
       }

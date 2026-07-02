@@ -473,17 +473,16 @@ fn env_val(name: &str, value: &str) -> EnvVar {
 /// dispatched agents authenticate the same way Guilhem's own pod does.
 const FETCH_TOKENS_SCRIPT: &str = r#"set -eu
 export BAO_ADDR=http://openbao.occitan-system.svc.cluster.local:8200
-GH=$(bao kv get -field=value secret/occitan/github)
 GL=$(bao kv get -field=value secret/occitan/gitlab)
 umask 077
+bao kv get -field=value secret/occitan/github-app-id > /creds/github-app-id
+bao kv get -field=value secret/occitan/github-app-installation-id > /creds/github-app-installation-id
+bao kv get -field=value secret/occitan/github-app-private-key > /creds/github-app-private-key.pem
 cat > /creds/tokens.env <<EOF
-export GH_TOKEN='$GH'
-export GITHUB_TOKEN='$GH'
 export GITLAB_TOKEN='$GL'
 export GITLAB_PAT_TOKEN='$GL'
 EOF
 cat > /creds/.git-credentials <<EOF
-https://x-access-token:$GH@github.com
 https://oauth2:$GL@gitlab.com
 EOF
 cat > /creds/.gitconfig <<'EOF'

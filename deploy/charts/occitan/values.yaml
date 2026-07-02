@@ -6,7 +6,7 @@ imagePullSecrets:
 # ─── Gardian ─────────────────────────────────────────────────────────────────
 gardian:
   image: ghcr.io/miegjorn/gardian
-  imageTag: sha-e8ec834 # CI writes sha-<sha> here on every main push
+  imageTag: sha-60f2df3 # CI writes sha-<sha> here on every main push
   replicas: 1
   # gardian-server currently hardcodes 0.0.0.0:7400 and ignores GARDIAN_PORT.
   # TODO(gardian): make gardian-server honour GARDIAN_PORT, then this can move.
@@ -27,7 +27,7 @@ openbao:
 # ─── Farga ───────────────────────────────────────────────────────────────────
 farga:
   image: ghcr.io/miegjorn/farga
-  imageTag: sha-92ade2c # CI writes sha-<sha> here on every main push
+  imageTag: sha-e3bfd3e # CI writes sha-<sha> here on every main push
   replicas: 1
   port: 7500
   storage: 5Gi
@@ -39,7 +39,7 @@ farga:
 # Canvases are baked into the image at /canvases/stdlib.
 amassada:
   image: ghcr.io/miegjorn/amassada
-  imageTag: sha-2c18794 # CI writes sha-<sha> here on every main push
+  imageTag: sha-41871ee # CI writes sha-<sha> here on every main push
   replicas: 1
   port: 7600
   env:
@@ -68,12 +68,12 @@ amassada:
 # ─── Charradissa ─────────────────────────────────────────────────────────────
 charradissa:
   image: ghcr.io/miegjorn/charradissa
-  imageTag: sha-6ec9a77 # CI writes sha-<sha> here on every main push
+  imageTag: sha-383084f # CI writes sha-<sha> here on every main push
   replicas: 1
   port: 8448
   # Matrix room ID for the shared code-approval room. Agents call matrix_request_approval
   # which posts here; humans reply /approve <id> or /reject <id> <reason>.
-  approvalRoomId: "!BokftqVryoxAylmNbs:occitane.guilhem"
+  approvalRoomId: "!fXqxTadpzocBjuTaPn:occitane.guilhem"
   env:
     CHARRADISSA_CONFIG: /config/charradissa.toml
     GUILHEM_URL: "http://guilhem.agents.svc.cluster.local:8080"
@@ -106,25 +106,13 @@ charradissa:
             - "!zSeBDhFjVObXNpqAtF:occitane.guilhem"
           projectId: "occitan"
           endpoint: "http://amassada:7600/sessions/{room_id}/message"
-      # Per-room routes → independent component agent pods (deploy/charts/component-agents).
-      routes:
-        - roomId: "!oLMfqkKWdLOsoYfFJF:occitane.guilhem"
-          agentUrl: "http://gardian-agent.agents.svc.cluster.local:8080"
-        - roomId: "!krBXuAWYEBvVietDkW:occitane.guilhem"
-          agentUrl: "http://fondament-agent.agents.svc.cluster.local:8080"
-        - roomId: "!HJdLzzxmDCnDWSEMBz:occitane.guilhem"
-          agentUrl: "http://farga-agent.agents.svc.cluster.local:8080"
-        - roomId: "!phBWfuMGHXVnaHvIxy:occitane.guilhem"
-          agentUrl: "http://amassada-agent.agents.svc.cluster.local:8080"
-        - roomId: "!EXkMbIjjNychELJzIj:occitane.guilhem"
-          agentUrl: "http://cor-agent.agents.svc.cluster.local:8080"
-        - roomId: "!pBDGvBBZNDxcMRIzNk:occitane.guilhem"
-          agentUrl: "http://caissa-agent.agents.svc.cluster.local:8080"
-        - roomId: "!fJuorsOLAPwqRlvYpT:occitane.guilhem"
-          agentUrl: "http://charradissa-agent.agents.svc.cluster.local:8080"
-        - roomId: "!GXmDDddMeiOcbiZthD:occitane.guilhem"
-          agentUrl: "http://nervi-agent.agents.svc.cluster.local:8080"
-          # ANTHROPIC_API_KEY from 'anthropic' secret; MATRIX_AS_TOKEN from 'charradissa' secret.
+      # Component agents now run independent Matrix sessions — Charradissa
+      # no longer relays for their rooms (see Occitan#per-agent-matrix-independence).
+      # This list intentionally empty; Task 8's skip-list guard in
+      # charradissa-matrix/src/appservice.rs stops the default-agent-url
+      # fallback from picking these rooms up regardless.
+      routes: []
+      # ANTHROPIC_API_KEY from 'anthropic' secret; MATRIX_AS_TOKEN from 'charradissa' secret.
 # ─── Valkey (Redis-compatible cache for Authentik) ────────────────────────────
 valkey:
   enabled: true
@@ -192,3 +180,15 @@ element:
   replicas: 1
   port: 80
   brand: "Occitan"
+# ─── Matrix Bootstrap Job ────────────────────────────────────────────────────
+matrixBootstrap:
+  # Lean CLI image (just the caissa binary, no agent sandbox) -- the same
+  # image guilhem's chart calls caissaImage for sidecars that only need to
+  # run one caissa subcommand. Must NOT be the heavy caissa-sandbox image
+  # (that's a different build, doesn't need to track this one's tag at all).
+  image: ghcr.io/miegjorn/caissa:latest
+  imagePullSecrets:
+    - name: ghcr-creds
+# no-op: branch-protection gate verification 2026-07-01T17:02:23Z
+# no-op: guilhem-bot identity verification 2026-07-01T18:49:58Z
+# no-op: guilhem-bot round-2 verification (post-fix) 2026-07-01T20:59:59Z

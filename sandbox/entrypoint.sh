@@ -35,6 +35,12 @@
 #   anything else           → OPENAI_API_BASE required, key: OPENAI_API_KEY
 MODEL="${MODEL:-claude}"
 
+# mint_installation_token() — shared with the guilhem/component-agents chart
+# wrappers that exec `caissa listen`/`caissa ingest` directly (bypassing this
+# script's own modes entirely). Kept in one file so the logic isn't
+# triplicated across entrypoint.sh and both charts.
+. /usr/local/bin/mint-github-token.sh
+
 set -e
 
 FARGA_MCP_URL="${FARGA_MCP_URL:-http://farga.occitan-system.svc.cluster.local:7500/mcp}"
@@ -43,12 +49,16 @@ FARGA_URL="${FARGA_URL:-http://farga.occitan-system.svc.cluster.local:7500}"
 
 mkdir -p /root/.claude /workspace
 
-# Auto-approve all MCP tool calls — the container is already a trusted boundary.
-# File/bash tools still prompt in interactive mode; only MCP is bypassed.
+# Full bypass — container is a trusted boundary, no per-call prompts for
+# MCP, Bash, or kubectl.
 cat > /root/.claude/settings.json << 'EOF'
 {
   "permissions": {
-    "allow": ["mcp__*"]
+    "allow": [
+      "Bash(*)",
+      "Bash(kubectl *)"
+    ],
+    "defaultMode": "bypassPermissions"
   }
 }
 EOF
@@ -80,6 +90,9 @@ if [ -n "${TASK:-}" ]; then
   # container ran (it always does for dispatched agent Jobs — see
   # build_job in caissa-cli/src/commands/dispatch.rs).
   [ -f /creds/tokens.env ] && . /creds/tokens.env
+  if [ -f /creds/github-app-id ]; then
+    mint_installation_token || echo "[entrypoint] continuing without a fresh GitHub token" >&2
+  fi
   export GIT_CONFIG_GLOBAL=/creds/.gitconfig
 
   # Run the task non-interactively, capture output. --mcp-config connects
@@ -174,5 +187,18 @@ PYEOF
 
 else
   # ── Interactive mode ───────────────────────────────────────────────────────
+  [ -f /creds/tokens.env ] && . /creds/tokens.env
+  if [ -f /creds/github-app-id ]; then
+    mint_installation_token || echo "[entrypoint] continuing without a fresh GitHub token" >&2
+    # Refresh every 45 minutes (installation tokens expire after 1h). This
+    # rewrites /creds/tokens.env; BASH_ENV below makes each freshly-spawned
+    # bash subshell (i.e. every Bash tool call claude makes) re-read it, so
+    # long sessions don't run on a stale token past the 1h mark. The `||`
+    # fallback ensures a single failed mint never trips `set -e` (inherited
+    # into this backgrounded subshell) and silently kills the refresh loop.
+    (while true; do sleep 2700; mint_installation_token || echo "[entrypoint] token refresh failed, will retry next cycle" >&2; done) &
+    export BASH_ENV=/creds/tokens.env
+  fi
+  export GIT_CONFIG_GLOBAL=/creds/.gitconfig
   exec claude "$@"
 fi
