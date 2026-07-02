@@ -33,12 +33,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # caissa-core → amassada-core (path dep). Check out the upstream repo as
-      # a named build context so the relative path resolves in the Dockerfile.
+      # caissa-core → amassada-core → fondament-core (transitive path deps).
+      # Check out both upstream repos as named build contexts.
       - uses: actions/checkout@v4
         with:
           repository: miegjorn/Amassada
           path: amassada-src
+          token: ${{ secrets.MIEGJORN_CI_TOKEN }}
+      - uses: actions/checkout@v4
+        with:
+          repository: miegjorn/Fondament
+          path: fondament-src
           token: ${{ secrets.MIEGJORN_CI_TOKEN }}
 
       - uses: docker/setup-buildx-action@v3
@@ -61,6 +66,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           build-contexts: |
             amassada=./amassada-src
+            fondament=./fondament-src
           cache-from: type=gha,scope=${{ github.workflow }}
           cache-to: type=gha,mode=max,scope=${{ github.workflow }}
 
@@ -76,19 +82,20 @@ jobs:
         with:
           token: ${{ secrets.MIEGJORN_CI_TOKEN }}
 
+      # caissa-core → amassada-core → fondament-core (transitive path deps,
+      # resolved via real Cargo path dependencies, not just the --fondament-path
+      # CLI flag below). These must land as true sibling directories of this
+      # checkout, not subdirectories, for `cargo run --bin caissa` (run
+      # directly on the runner, no Docker) to resolve them the same way it
+      # does in local dev — hence path: ../Fondament / ../Amassada rather than
+      # a plain subdirectory name.
       - uses: actions/checkout@v4
         with:
           repository: miegjorn/Fondament
           token: ${{ secrets.MIEGJORN_CI_TOKEN }}
           ref: main
-          path: Fondament
+          path: ../Fondament
 
-      # caissa-core → amassada-core (path dep: ../Amassada/crates/amassada-core,
-      # relative to this checkout's own root). Unlike Fondament above (accessed
-      # via an explicit --fondament-path flag), this one is a real Cargo path
-      # dependency and must land as a true sibling directory, not a subdirectory,
-      # for `cargo run --bin caissa` (run directly on the runner, no Docker) to
-      # resolve it the same way it does in local dev.
       - uses: actions/checkout@v4
         with:
           repository: miegjorn/Amassada
@@ -107,7 +114,7 @@ jobs:
           password: ${{ secrets.MIEGJORN_CI_TOKEN }}
 
       - name: Build guilhem sandbox image
-        run: cargo run --bin caissa -- build guilhem --fondament-path ./Fondament
+        run: cargo run --bin caissa -- build guilhem --fondament-path ../Fondament
 
       - name: Tag and push
         run: |
