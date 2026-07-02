@@ -41,8 +41,12 @@ use hmac::{Hmac, Mac};
 use sha1::Sha1;
 
 /// (Matrix localpart, Matrix room ID) for each of the 9 independent agents.
+/// guilhem's room is `#occitan` (a Matrix Space, `!iNQRqUAMckCUQrSFHk`) — the
+/// project room, mapped to the `Occitan` GitHub repo where cross-component
+/// Initiatives live — not the separate `#guilhem` room drift had produced;
+/// that room is now orphaned (left as-is, not actively cleaned up).
 pub const AGENTS: &[(&str, &str)] = &[
-    ("guilhem", "!hTNBZpYDxyvfcuralm:occitane.guilhem"),
+    ("guilhem", "!iNQRqUAMckCUQrSFHk:occitane.guilhem"),
     ("gardian", "!bwuKXFvUXnVZfXcKuz:occitane.guilhem"),
     ("fondament", "!KuWBSmYyvyiyTMFKqJ:occitane.guilhem"),
     ("farga", "!CtktMiOTNtSIkdwOxq:occitane.guilhem"),
