@@ -152,7 +152,11 @@ element:
   brand: "Occitan"
 # ─── Matrix Bootstrap Job ────────────────────────────────────────────────────
 matrixBootstrap:
-  image: ghcr.io/miegjorn/caissa-sandbox:guilhem-sha-b24dfc5
+  # Lean CLI image (just the caissa binary, no agent sandbox) -- the same
+  # image guilhem's chart calls caissaImage for sidecars that only need to
+  # run one caissa subcommand. Must NOT be the heavy caissa-sandbox image
+  # (that's a different build, doesn't need to track this one's tag at all).
+  image: ghcr.io/miegjorn/caissa:latest
   imagePullSecrets:
     - name: ghcr-creds
 # no-op: branch-protection gate verification 2026-07-01T17:02:23Z
