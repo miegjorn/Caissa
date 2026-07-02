@@ -2,6 +2,11 @@ FROM rust:latest AS builder
 RUN apt-get update \
     && apt-get install -y --no-install-recommends pkg-config libssl-dev \
     && rm -rf /var/lib/apt/lists/*
+# caissa-core → amassada-core (path dep). Provide the upstream repo as a named
+# build context so the relative path resolves: /Amassada → amassada-core
+# (caissa-core's dep, via workspace: ../Amassada/crates/amassada-core).
+WORKDIR /Amassada
+COPY --from=amassada . .
 WORKDIR /app
 COPY . .
 RUN cargo build --release -p caissa-cli
