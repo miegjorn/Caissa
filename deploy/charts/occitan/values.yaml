@@ -106,25 +106,13 @@ charradissa:
             - "!zSeBDhFjVObXNpqAtF:occitane.guilhem"
           projectId: "occitan"
           endpoint: "http://amassada:7600/sessions/{room_id}/message"
-      # Per-room routes → independent component agent pods (deploy/charts/component-agents).
-      routes:
-        - roomId: "!oLMfqkKWdLOsoYfFJF:occitane.guilhem"
-          agentUrl: "http://gardian-agent.agents.svc.cluster.local:8080"
-        - roomId: "!krBXuAWYEBvVietDkW:occitane.guilhem"
-          agentUrl: "http://fondament-agent.agents.svc.cluster.local:8080"
-        - roomId: "!HJdLzzxmDCnDWSEMBz:occitane.guilhem"
-          agentUrl: "http://farga-agent.agents.svc.cluster.local:8080"
-        - roomId: "!phBWfuMGHXVnaHvIxy:occitane.guilhem"
-          agentUrl: "http://amassada-agent.agents.svc.cluster.local:8080"
-        - roomId: "!EXkMbIjjNychELJzIj:occitane.guilhem"
-          agentUrl: "http://cor-agent.agents.svc.cluster.local:8080"
-        - roomId: "!pBDGvBBZNDxcMRIzNk:occitane.guilhem"
-          agentUrl: "http://caissa-agent.agents.svc.cluster.local:8080"
-        - roomId: "!fJuorsOLAPwqRlvYpT:occitane.guilhem"
-          agentUrl: "http://charradissa-agent.agents.svc.cluster.local:8080"
-        - roomId: "!GXmDDddMeiOcbiZthD:occitane.guilhem"
-          agentUrl: "http://nervi-agent.agents.svc.cluster.local:8080"
-          # ANTHROPIC_API_KEY from 'anthropic' secret; MATRIX_AS_TOKEN from 'charradissa' secret.
+      # Component agents now run independent Matrix sessions — Charradissa
+      # no longer relays for their rooms (see Occitan#per-agent-matrix-independence).
+      # This list intentionally empty; Task 8's skip-list guard in
+      # charradissa-matrix/src/appservice.rs stops the default-agent-url
+      # fallback from picking these rooms up regardless.
+      routes: []
+      # ANTHROPIC_API_KEY from 'anthropic' secret; MATRIX_AS_TOKEN from 'charradissa' secret.
 # ─── Synapse (Matrix homeserver) ─────────────────────────────────────────────
 synapse:
   image: matrixdotorg/synapse:latest
