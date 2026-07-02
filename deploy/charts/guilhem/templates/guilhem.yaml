@@ -553,6 +553,10 @@ spec:
               [safe]
                   directory = *
               EOF
+              bao kv get -field=value secret/occitan/matrix/guilhem-password > /tmp/matrix-password 2>/dev/null || echo -n "" > /tmp/matrix-password
+              cat >> /creds/tokens.env <<EOF
+              export MATRIX_PASSWORD='$(cat /tmp/matrix-password)'
+              EOF
               echo "tokens + git creds written to /creds"
           env:
             - name: BAO_TOKEN
@@ -630,6 +634,12 @@ spec:
               value: {{ .Values.backlog.matrixRoomId | quote }}
             - name: DREAM_MATRIX_ROOM_ID
               value: {{ .Values.dream.matrixRoomId | quote }}
+            - name: MATRIX_USER
+              value: {{ .Values.matrix.user | quote }}
+            - name: MATRIX_ROOM_ID
+              value: {{ .Values.matrix.roomId | quote }}
+            - name: MATRIX_HOMESERVER
+              value: {{ .Values.matrix.homeserver | quote }}
           volumeMounts:
             - name: caissa-config
               mountPath: /workspace/caissa.toml
