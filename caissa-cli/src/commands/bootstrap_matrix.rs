@@ -12,18 +12,25 @@
 //! local room's own `join_rules: invite` (that admin capability is for
 //! joining *federated* rooms an admin couldn't otherwise reach, not for
 //! overriding local auth rules — attempting it produces a genuine Matrix
-//! auth-chain rejection: "Denying new event ... because ... not in room").
-//! Instead this uses the standard Matrix flow: `@charradissa-relay` (already
-//! a member of every one of these 9 rooms) invites each agent using its own
-//! appservice token, then each agent logs in with its own just-registered
-//! password and joins normally — both steps are idempotent per the Matrix
-//! spec (inviting an already-joined user errors harmlessly; joining an
-//! already-joined room just succeeds).
+//! auth-chain rejection).
 //!
-//! Finally, `@charradissa-relay` leaves every component room it's still in
-//! (a self-leave needs no elevated power at all, unlike a kick) — checked
-//! against its own current `joined_rooms` first, so this is a no-op on
-//! reruns once it's already left.
+//! It also does NOT use `@charradissa-relay`'s own appservice token to
+//! invite, despite that being the current runtime identity of the Charradissa
+//! relay: renaming an appservice's `sender_localpart` in code does not
+//! migrate Matrix room *membership* — Matrix has no concept of renaming a
+//! user. Confirmed live: every one of these 9 rooms' actual member is still
+//! the pre-rename `@charradissa` account; `@charradissa-relay` is a brand
+//! new identity with zero room memberships, so it has no standing to invite
+//! anyone into any of them.
+//!
+//! Instead this uses `@pierre-luc` (the real, confirmed creator/PL-100
+//! member of every one of these 9 rooms) to send the invites, and to kick
+//! the old `@charradissa` account out of the 8 component rooms (pierre-luc's
+//! PL 100 exceeds both the room's kick-required PL and charradissa's own
+//! PL 50). Each agent then logs in with its own just-registered password and
+//! joins normally — idempotent per the Matrix spec (inviting an
+//! already-joined user errors harmlessly; joining an already-joined room
+//! just succeeds; kicking someone no longer in the room errors harmlessly).
 //!
 //! Deliberately stores passwords, not access tokens: a token can go stale
 //! after a Matrix reset in a way a stored password can't (each agent's own
@@ -254,23 +261,32 @@ async fn register_user(client: &reqwest::Client, homeserver: &str, shared_secret
     anyhow::bail!("register_user {} failed: {:?}", username, body);
 }
 
-/// Invite `user_id` into `room_id` as `@charradissa-relay` (the appservice's
-/// own sender identity — no `?user_id=` impersonation needed, since it's
-/// acting as itself, a real member of every one of these 9 rooms). Treated
-/// as best-effort by the caller: inviting an already-invited or
+/// Invite `user_id` into `room_id` as `token`'s own identity (no
+/// `?user_id=` impersonation — the caller acts as itself). Retries on 429
+/// (Synapse's per-user invite rate limiter, confirmed live: a rapid-fire
+/// loop of 9 invites from the same sender trips it well within a second)
+/// with a short fixed backoff, up to a few attempts. Any other failure is
+/// treated as best-effort by the caller: inviting an already-invited or
 /// already-joined user is a harmless no-op for the overall bootstrap (the
-/// subsequent self-join step succeeds either way), so failures here are
-/// logged, not propagated.
-async fn matrix_invite(client: &reqwest::Client, homeserver: &str, as_token: &str, room_id: &str, user_id: &str) -> anyhow::Result<()> {
-    let resp = client
-        .post(format!("{}/_matrix/client/v3/rooms/{}/invite", homeserver, urlencode(room_id)))
-        .header("Authorization", format!("Bearer {}", as_token))
-        .json(&serde_json::json!({ "user_id": user_id }))
-        .send().await?;
-    if !resp.status().is_success() {
+/// subsequent self-join step succeeds either way).
+async fn matrix_invite(client: &reqwest::Client, homeserver: &str, token: &str, room_id: &str, user_id: &str) -> anyhow::Result<()> {
+    const MAX_ATTEMPTS: u32 = 5;
+    for attempt in 1..=MAX_ATTEMPTS {
+        let resp = client
+            .post(format!("{}/_matrix/client/v3/rooms/{}/invite", homeserver, urlencode(room_id)))
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&serde_json::json!({ "user_id": user_id }))
+            .send().await?;
+        if resp.status().is_success() {
+            return Ok(());
+        }
+        if resp.status().as_u16() == 429 && attempt < MAX_ATTEMPTS {
+            tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
+            continue;
+        }
         anyhow::bail!("invite {} into {} failed: {}", user_id, room_id, resp.status());
     }
-    Ok(())
+    unreachable!()
 }
 
 /// Log in as `username` with its own password — the same login path each
@@ -305,31 +321,21 @@ async fn matrix_join(client: &reqwest::Client, homeserver: &str, token: &str, ro
     Ok(())
 }
 
-/// The room IDs `@charradissa-relay` is currently a member of, using its own
-/// appservice token — no admin capability needed, this is just the normal
-/// "list my own joined rooms" endpoint.
-async fn matrix_joined_rooms(client: &reqwest::Client, homeserver: &str, as_token: &str) -> anyhow::Result<Vec<String>> {
-    let resp: serde_json::Value = client
-        .get(format!("{}/_matrix/client/v3/joined_rooms", homeserver))
-        .header("Authorization", format!("Bearer {}", as_token))
-        .send().await?
-        .json().await?;
-    Ok(resp["joined_rooms"].as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-        .unwrap_or_default())
-}
-
-/// `@charradissa-relay` leaves `room_id` (a self-leave, using its own
-/// appservice token) — no elevated power needed, unlike kicking someone
-/// else. Only called for rooms it's confirmed to currently be a member of.
-async fn matrix_leave(client: &reqwest::Client, homeserver: &str, as_token: &str, room_id: &str) -> anyhow::Result<()> {
+/// Kick `user_id` from `room_id` using `token`. Used with pierre-luc's own
+/// token (PL 100) to remove the pre-rename `@charradissa` account (PL 50)
+/// from the 8 component rooms — pierre-luc's PL exceeds both the room's
+/// kick-required PL and charradissa's own PL, so this succeeds regardless
+/// of which identity is being cleaned up. Treated as best-effort: kicking
+/// someone no longer in the room errors harmlessly, making this safe to
+/// rerun once the cleanup has already happened.
+async fn matrix_kick(client: &reqwest::Client, homeserver: &str, token: &str, room_id: &str, user_id: &str, reason: &str) -> anyhow::Result<()> {
     let resp = client
-        .post(format!("{}/_matrix/client/v3/rooms/{}/leave", homeserver, urlencode(room_id)))
-        .header("Authorization", format!("Bearer {}", as_token))
-        .json(&serde_json::json!({}))
+        .post(format!("{}/_matrix/client/v3/rooms/{}/kick", homeserver, urlencode(room_id)))
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&serde_json::json!({ "user_id": user_id, "reason": reason }))
         .send().await?;
     if !resp.status().is_success() {
-        anyhow::bail!("leave {} failed: {}", room_id, resp.status());
+        anyhow::bail!("kick {} from {} failed: {}", user_id, room_id, resp.status());
     }
     Ok(())
 }
@@ -350,9 +356,15 @@ pub async fn run(homeserver: &str, bao_addr: &str) -> anyhow::Result<()> {
         .map_err(|_| anyhow::anyhow!("BAO_TOKEN not set"))?;
     let shared_secret = std::env::var("SYNAPSE_REGISTRATION_SHARED_SECRET")
         .map_err(|_| anyhow::anyhow!("SYNAPSE_REGISTRATION_SHARED_SECRET not set"))?;
-    let charradissa_as_token = std::env::var("CHARRADISSA_AS_TOKEN")
-        .map_err(|_| anyhow::anyhow!("CHARRADISSA_AS_TOKEN not set"))?;
     let client = reqwest::Client::new();
+
+    // pierre-luc: real confirmed creator/PL-100 member of every one of these
+    // 9 rooms — read-only lookup, this password is never generated or
+    // rotated by this Job (unlike the 9 agents' own passwords below).
+    let pierre_luc_password = bao_get(&client, bao_addr, &bao_token, "occitan/matrix/pierre-luc-password")
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("occitan/matrix/pierre-luc-password not found in OpenBao"))?;
+    let pierre_luc_token = matrix_login(&client, homeserver, "pierre-luc", &pierre_luc_password).await?;
 
     let mut passwords = Vec::with_capacity(AGENTS.len());
     for (name, room_id) in AGENTS {
@@ -365,7 +377,7 @@ pub async fn run(homeserver: &str, bao_addr: &str) -> anyhow::Result<()> {
         let user_id = format!("@{}:occitane.guilhem", name);
         // Best-effort: already-invited/already-joined errors are harmless —
         // the self-join step below succeeds either way.
-        if let Err(e) = matrix_invite(&client, homeserver, &charradissa_as_token, room_id, &user_id).await {
+        if let Err(e) = matrix_invite(&client, homeserver, &pierre_luc_token, room_id, &user_id).await {
             tracing::warn!("bootstrap-matrix: invite {} into {} failed (continuing — may already be invited or joined): {}", user_id, room_id, e);
         }
     }
@@ -376,12 +388,18 @@ pub async fn run(homeserver: &str, bao_addr: &str) -> anyhow::Result<()> {
         tracing::info!("bootstrap-matrix: @{} joined {}", name, room_id);
     }
 
-    let relay_id = "@charradissa-relay:occitane.guilhem";
-    let currently_joined = matrix_joined_rooms(&client, homeserver, &charradissa_as_token).await?;
+    // The pre-rename @charradissa account (not @charradissa-relay, which has
+    // never held membership anywhere) is still an actual member of these 8
+    // rooms — clean it up now that each room has its own real agent.
+    let old_charradissa_id = "@charradissa:occitane.guilhem";
     for (name, room_id) in component_rooms() {
-        if currently_joined.iter().any(|r| r == room_id) {
-            matrix_leave(&client, homeserver, &charradissa_as_token, room_id).await?;
-            tracing::info!("bootstrap-matrix: {} left {} ({})", relay_id, name, room_id);
+        if let Err(e) = matrix_kick(
+            &client, homeserver, &pierre_luc_token, room_id, old_charradissa_id,
+            "component agents now run independent Matrix sessions — see Occitan#per-agent-matrix-independence",
+        ).await {
+            tracing::warn!("bootstrap-matrix: kick {} from {} ({}) failed (continuing — may already be gone): {}", old_charradissa_id, name, room_id, e);
+        } else {
+            tracing::info!("bootstrap-matrix: kicked {} from {} ({})", old_charradissa_id, name, room_id);
         }
     }
 

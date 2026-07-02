@@ -39,13 +39,3 @@ spec:
                 secretKeyRef:
                   name: synapse-registration-secret
                   key: registration-shared-secret
-            # @charradissa-relay is already a member of every one of these 9
-            # rooms — its own appservice token is what invites each agent
-            # (Synapse's admin "force join" API does not bypass a local
-            # room's join_rules: invite, confirmed live; invite-then-self-join
-            # is the only mechanism that actually works here).
-            - name: CHARRADISSA_AS_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: charradissa
-                  key: as-token
