@@ -1,6 +1,6 @@
 # caissa binary image used for all component agent pods.
 # Same binary as Guilhem — only the Farga project context differs.
-image: ghcr.io/miegjorn/caissa-sandbox:guilhem-sha-7dbc642
+image: ghcr.io/miegjorn/caissa-sandbox:guilhem-sha-779ccfc
 
 # Image for issue-sync CronJobs. Must have: gh, curl, sh.
 # ghcr.io/cli/cli never published Docker images — ubuntu:22.04 has gh in apt.
