@@ -269,12 +269,26 @@ spec:
               fi
               export GIT_CONFIG_GLOBAL=/creds/.gitconfig
               export PATH="/tools:$PATH"
+              # Regenerate CLAUDE.md live from fondament-server on every pod
+              # start, instead of trusting the image-build-time bake — same
+              # "no vendored copy" principle as fetch_fondament_def.
+              curl -s --max-time 10 "$FONDAMENT_URL/raw/fondament/guilhem" 2>/dev/null \
+                | awk '/^context: \|/{flag=1; next} flag && /^[a-zA-Z_]+:/{flag=0} flag{print substr($0,3)}' \
+                > /root/.claude/CLAUDE.md.new 2>/dev/null
+              if [ -s /root/.claude/CLAUDE.md.new ]; then
+                mv /root/.claude/CLAUDE.md.new /root/.claude/CLAUDE.md
+              else
+                echo "[guilhem] fondament-server unreachable at startup — keeping image-baked CLAUDE.md" >&2
+                rm -f /root/.claude/CLAUDE.md.new
+              fi
               exec caissa listen --port 8080
           env:
             - name: FARGA_URL
               value: {{ .Values.farga.url | quote }}
             - name: FARGA_PROJECT
               value: {{ .Values.farga.project | quote }}
+            - name: FONDAMENT_URL
+              value: {{ .Values.fondament.url | quote }}
             - name: ANTHROPIC_API_KEY
               valueFrom:
                 secretKeyRef:
