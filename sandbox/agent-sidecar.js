@@ -9,6 +9,11 @@ function parseInitLine(line) {
     allowedTools: obj.allowedTools || [],
     skills: obj.skills || [],
     mcpServers: obj.mcpServers || {},
+    // Extended-thinking token budget for the aporia discipline. Absent
+    // (undefined) when the agent's Fondament definition doesn't declare the
+    // aporia modifier — omitted from the query() options in that case so
+    // extended thinking stays off exactly like before this was wired.
+    maxThinkingTokens: obj.maxThinkingTokens,
   };
 }
 
@@ -58,6 +63,9 @@ async function runLoop() {
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
       };
+      if (init.maxThinkingTokens !== undefined && init.maxThinkingTokens !== null) {
+        options.maxThinkingTokens = init.maxThinkingTokens;
+      }
       if (sessionId) {
         options.resume = sessionId;
       }

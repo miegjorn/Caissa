@@ -328,7 +328,38 @@ async fn matrix_join(client: &reqwest::Client, homeserver: &str, token: &str, ro
 /// of which identity is being cleaned up. Treated as best-effort: kicking
 /// someone no longer in the room errors harmlessly, making this safe to
 /// rerun once the cleanup has already happened.
-async fn matrix_kick(client: &reqwest::Client, homeserver: &str, token: &str, room_id: &str, user_id: &str, reason: &str) -> anyhow::Result<()> {
+/// Kicking requires the actor's power level to be strictly greater than the
+/// target's (Matrix auth rule) — equal power cannot kick equal power.
+/// Confirmed live: these rooms were manually recreated after a Matrix reset
+/// and don't follow create_room_with_owner's intended PL scheme — the old
+/// @charradissa account ended up at PL 100, the same as pierre-luc, so a
+/// plain kick 403s every time. Demote the target to PL 0 first (a
+/// power_levels state event, which only requires the actor to meet the
+/// room's own `events.m.room.power_levels` threshold, unrelated to the
+/// kick-vs-target comparison), then kick.
+async fn matrix_demote_and_kick(client: &reqwest::Client, homeserver: &str, token: &str, room_id: &str, user_id: &str, reason: &str) -> anyhow::Result<()> {
+    let get_resp = client
+        .get(format!("{}/_matrix/client/v3/rooms/{}/state/m.room.power_levels", homeserver, urlencode(room_id)))
+        .header("Authorization", format!("Bearer {}", token))
+        .send().await?;
+    if !get_resp.status().is_success() {
+        anyhow::bail!("get power_levels for {} failed: {}", room_id, get_resp.status());
+    }
+    let mut power_levels: serde_json::Value = get_resp.json().await?;
+
+    let current = power_levels["users"][user_id].as_i64();
+    if current.is_some() && current != Some(0) {
+        power_levels["users"][user_id] = serde_json::json!(0);
+        let put_resp = client
+            .put(format!("{}/_matrix/client/v3/rooms/{}/state/m.room.power_levels", homeserver, urlencode(room_id)))
+            .header("Authorization", format!("Bearer {}", token))
+            .json(&power_levels)
+            .send().await?;
+        if !put_resp.status().is_success() {
+            anyhow::bail!("demote {} in {} failed: {}", user_id, room_id, put_resp.status());
+        }
+    }
+
     let resp = client
         .post(format!("{}/_matrix/client/v3/rooms/{}/kick", homeserver, urlencode(room_id)))
         .header("Authorization", format!("Bearer {}", token))
@@ -393,7 +424,7 @@ pub async fn run(homeserver: &str, bao_addr: &str) -> anyhow::Result<()> {
     // rooms — clean it up now that each room has its own real agent.
     let old_charradissa_id = "@charradissa:occitane.guilhem";
     for (name, room_id) in component_rooms() {
-        if let Err(e) = matrix_kick(
+        if let Err(e) = matrix_demote_and_kick(
             &client, homeserver, &pierre_luc_token, room_id, old_charradissa_id,
             "component agents now run independent Matrix sessions — see Occitan#per-agent-matrix-independence",
         ).await {

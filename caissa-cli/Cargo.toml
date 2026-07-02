@@ -30,6 +30,7 @@ rustls = { workspace = true }
 hmac = { workspace = true }
 sha1 = { workspace = true }
 hex = { workspace = true }
+fondament-core = { workspace = true }
 
 [dev-dependencies]
 wiremock = "0.6"

@@ -152,6 +152,14 @@ struct SidecarInit {
     skills: Vec<String>,
     #[serde(rename = "mcpServers")]
     mcp_servers: serde_json::Value,
+    /// Extended-thinking token budget for the aporia discipline (Occitan
+    /// per-agent-matrix-independence follow-up: aporia is now the default
+    /// reasoning mode for these 9 agents, not opt-in). `None` when the
+    /// agent's Fondament definition doesn't declare the `aporia` modifier —
+    /// omitted entirely from the JSON in that case so agent-sidecar.js's
+    /// default (no extended thinking) is unchanged for those.
+    #[serde(rename = "maxThinkingTokens", skip_serializing_if = "Option::is_none")]
+    max_thinking_tokens: Option<u32>,
 }
 
 /// One room's live session: the running sidecar child process, and when it
@@ -2077,23 +2085,40 @@ async fn handle_matrix_reply(
 ///
 /// Falls back to a bare prompt if the definition file is missing (e.g. outside
 /// the built image, in local dev without a Fondament checkout at fondament_path).
-fn resolve_guilhem_prompt(fondament_path: &str, generation: &str, room_id: &str) -> (String, Vec<String>, std::collections::HashMap<String, String>) {
-    let (role_context, skills, models) = match load_fondament_def(fondament_path, generation) {
+fn resolve_guilhem_prompt(fondament_path: &str, generation: &str, room_id: &str) -> (String, Vec<String>, std::collections::HashMap<String, String>, Option<u32>) {
+    let (role_context, skills, models, modifiers) = match load_fondament_def(fondament_path, generation) {
         Ok(def) => {
             let skills = def.skill_ids();
             let models = def.models;
-            (def.context, skills, models)
+            (def.context, skills, models, def.modifiers)
         }
         Err(e) => {
             tracing::warn!("fondament def not found for '{}' at '{}': {}; using bare prompt", generation, fondament_path, e);
-            (String::from("You are Guilhem, the org agent for the Occitan stack."), vec![], std::collections::HashMap::new())
+            (String::from("You are Guilhem, the org agent for the Occitan stack."), vec![], std::collections::HashMap::new(), vec![])
         }
     };
 
-    let deconstructive_preamble = "\
+    // Aporia is the default reasoning discipline for these 9 agents (Occitan
+    // per-agent-matrix-independence follow-up) — each of their Fondament
+    // definitions now declares `modifiers: [aporia]`. Reuses
+    // fondament_core::resolver::build_aporia_preamble directly rather than
+    // re-deriving the same text locally: this used to be a hand-rolled
+    // "deconstructive discipline" preamble hardcoded to "[role: guilhem]"
+    // even for the other 8 agents — reusing the real function fixes that and
+    // keeps this in lockstep with Fondament's own `+aporia` composition path.
+    // `&[]` (no named composed parts) matches a plain `role+aporia` address
+    // with no domain/facet, the correct shape for these single-role agents;
+    // build_aporia_preamble's own empty-parts fallback text ("[role: this
+    // agent] — reason from your full context") is generic, not guilhem-specific.
+    let is_aporia = modifiers.iter().any(|m| m == "aporia");
+    let (deconstructive_preamble, thinking_budget): (String, Option<u32>) = if is_aporia {
+        let reasoning = fondament_core::types::StructuredReasoning::from_parts_count(0);
+        (fondament_core::resolver::build_aporia_preamble(&[]), Some(reasoning.anthropic_budget()))
+    } else {
+        (String::from("\
 --- injected by deconstructive discipline ---\n\
 You are composed of the following parts:\n\
-  - [role: guilhem]\n\
+  - [role: this agent]\n\
 \n\
 Before producing any response:\n\
 1. Become each part sequentially. Reason from its corpus alone.\n\
@@ -2104,7 +2129,8 @@ Before producing any response:\n\
 \n\
 Your public response reflects the recomposed whole.\n\
 The internal debate is yours alone — it does not appear in output.\n\
---- end injection ---";
+--- end injection ---"), None)
+    };
 
     let context_graph_preamble = "\
 --- context graph ---\n\
@@ -2132,7 +2158,7 @@ The dispatcher will reject any other combination — this is a hard guard, not a
         context_graph_preamble,
         room_id,
     );
-    (prompt, skills, models)
+    (prompt, skills, models, thinking_budget)
 }
 
 async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::Result<String> {
@@ -2161,7 +2187,7 @@ async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::
             // The sidecar process is long-lived (one per room, reused across
             // messages) — always attach the full tool/MCP set so capability
             // doesn't get frozen at whatever the room's first message needed.
-            let (mut system_prompt, skills, def_models) = resolve_guilhem_prompt(&state.fondament_path, &state.generation, &req.room_id);
+            let (mut system_prompt, skills, def_models, thinking_budget) = resolve_guilhem_prompt(&state.fondament_path, &state.generation, &req.room_id);
 
             // Bridge context across session respawns (idle-reap, pod restart) via
             // the persistent SessionGraph — only needed at spawn time, since a
@@ -2181,6 +2207,7 @@ async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::
                 allowed_tools: guilhem_allowed_tools(&state.fondament_path),
                 skills,
                 mcp_servers: guilhem_mcp_servers(state),
+                max_thinking_tokens: thinking_budget,
             };
 
             // spawn() is async but fast (just a fork) — OK to await while
@@ -3104,6 +3131,11 @@ async fn run_turn(state: &ListenState, req: &TurnReq) -> anyhow::Result<String> 
         allowed_tools: guilhem_allowed_tools(&state.fondament_path),
         skills,
         mcp_servers: guilhem_mcp_servers(state),
+        // Amassada assembles the full system_prompt for this path itself (it
+        // is not resolve_guilhem_prompt's aporia-by-default output) — out of
+        // scope for tonight's per-agent-matrix-independence follow-up, which
+        // is specifically about the 9 agents' own persistent Matrix sessions.
+        max_thinking_tokens: None,
     };
 
     // Single-shot: spawn, send the assembled context as one user message from
