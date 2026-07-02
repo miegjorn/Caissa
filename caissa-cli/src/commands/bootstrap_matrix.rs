@@ -111,18 +111,75 @@ mod tests {
         assert!(!names.contains(&"guilhem"));
         assert_eq!(names.len(), 8);
     }
+
+    /// A genuine 404 from OpenBao means the secret doesn't exist yet — safe
+    /// for the caller to generate and store a fresh password.
+    #[tokio::test]
+    async fn bao_get_404_is_ok_none() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::matchers::{method, path};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/secret/data/occitan/matrix/guilhem-password"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock_server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let result = bao_get(&client, &mock_server.uri(), "test-token", "occitan/matrix/guilhem-password").await;
+        assert!(result.is_ok(), "expected Ok, got {:?}", result);
+        assert_eq!(result.unwrap(), None);
+    }
+
+    /// A transient OpenBao failure (500) must NOT be confused with "doesn't
+    /// exist" — it must surface as an error so the caller doesn't regenerate
+    /// and overwrite a live password.
+    #[tokio::test]
+    async fn bao_get_500_is_err() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::matchers::{method, path};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/secret/data/occitan/matrix/guilhem-password"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&mock_server)
+            .await;
+
+        let client = reqwest::Client::new();
+        let result = bao_get(&client, &mock_server.uri(), "test-token", "occitan/matrix/guilhem-password").await;
+        assert!(result.is_err(), "expected Err, got {:?}", result);
+    }
 }
 
-async fn bao_get(client: &reqwest::Client, bao_addr: &str, bao_token: &str, path: &str) -> Option<String> {
+/// Read a stored secret from OpenBao's KV v2 HTTP API.
+///
+/// Returns `Ok(None)` only for a genuine 404 (the secret doesn't exist yet —
+/// safe for the caller to generate and store a fresh one). Any other failure
+/// — network error, non-404 non-success status, or a response body missing
+/// the expected `data.data.value` field — is `Err(...)`. Collapsing those
+/// into `None` would let a transient read failure look like "doesn't exist,"
+/// causing the caller to silently regenerate and overwrite a live password.
+async fn bao_get(client: &reqwest::Client, bao_addr: &str, bao_token: &str, path: &str) -> anyhow::Result<Option<String>> {
     let url = format!("{}/v1/secret/data/{}", bao_addr, path);
     let resp = client.get(&url)
         .header("X-Vault-Token", bao_token)
-        .send().await.ok()?;
-    if !resp.status().is_success() {
-        return None;
+        .send().await
+        .map_err(|e| anyhow::anyhow!("bao_get {} request failed: {}", path, e))?;
+
+    if resp.status().as_u16() == 404 {
+        return Ok(None);
     }
-    let json: serde_json::Value = resp.json().await.ok()?;
-    json["data"]["data"]["value"].as_str().map(|s| s.to_string())
+    if !resp.status().is_success() {
+        anyhow::bail!("bao_get {} failed: {}", path, resp.status());
+    }
+    let json: serde_json::Value = resp.json().await
+        .map_err(|e| anyhow::anyhow!("bao_get {} returned malformed JSON: {}", path, e))?;
+    match json["data"]["data"]["value"].as_str() {
+        Some(v) => Ok(Some(v.to_string())),
+        None => anyhow::bail!("bao_get {} succeeded but response is missing data.data.value: {}", path, json),
+    }
 }
 
 async fn bao_put(client: &reqwest::Client, bao_addr: &str, bao_token: &str, path: &str, value: &str) -> anyhow::Result<()> {
@@ -142,8 +199,9 @@ async fn bao_put(client: &reqwest::Client, bao_addr: &str, bao_token: &str, path
 /// agent pod is currently logging in with whatever password this returns.
 async fn get_or_create_password(client: &reqwest::Client, bao_addr: &str, bao_token: &str, agent: &str) -> anyhow::Result<String> {
     let path = format!("occitan/matrix/{}-password", agent);
-    if let Some(existing) = bao_get(client, bao_addr, bao_token, &path).await {
-        return Ok(existing);
+    match bao_get(client, bao_addr, bao_token, &path).await? {
+        Some(existing) => return Ok(existing),
+        None => { /* genuinely absent, fall through to generate+store */ }
     }
     let fresh = generate_password();
     bao_put(client, bao_addr, bao_token, &path, &fresh).await?;
