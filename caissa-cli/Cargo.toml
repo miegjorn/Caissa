@@ -27,3 +27,9 @@ aws-sdk-s3 = { workspace = true }
 aws-config = { workspace = true }
 aws-credential-types = { workspace = true }
 rustls = { workspace = true }
+hmac = { workspace = true }
+sha1 = { workspace = true }
+hex = { workspace = true }
+
+[dev-dependencies]
+wiremock = "0.6"
