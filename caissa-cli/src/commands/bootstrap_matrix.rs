@@ -247,7 +247,14 @@ async fn register_user(client: &reqwest::Client, homeserver: &str, shared_secret
 /// (registers a throwaway admin user, logs in, returns the token). The
 /// caller is responsible for deactivating it when done.
 async fn mint_admin_session(client: &reqwest::Client, homeserver: &str, shared_secret: &str) -> anyhow::Result<(String, String)> {
-    let admin_user = format!("bootstrap-admin-{}", std::process::id());
+    // std::process::id() is a poor uniqueness source here: it's almost always
+    // PID 1 inside a container, so every retry of this Job would collide on
+    // the exact same username as a prior attempt's leftover (never-deactivated,
+    // because that attempt failed before reaching cleanup) admin account,
+    // and registration would fail with M_USER_IN_USE (unhandled here, unlike
+    // register_user's agent-registration path) rather than mint a fresh one.
+    // generate_password()'s own timestamp-seeded PRNG is unique enough per call.
+    let admin_user = format!("bootstrap-admin-{}", generate_password());
     let admin_password = generate_password();
     let nonce_resp: serde_json::Value = client
         .get(format!("{}/_synapse/admin/v1/register", homeserver))
