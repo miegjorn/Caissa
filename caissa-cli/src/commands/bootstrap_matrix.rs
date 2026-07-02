@@ -24,13 +24,25 @@
 //! anyone into any of them.
 //!
 //! Instead this uses `@pierre-luc` (the real, confirmed creator/PL-100
-//! member of every one of these 9 rooms) to send the invites, and to kick
-//! the old `@charradissa` account out of the 8 component rooms (pierre-luc's
-//! PL 100 exceeds both the room's kick-required PL and charradissa's own
-//! PL 50). Each agent then logs in with its own just-registered password and
-//! joins normally — idempotent per the Matrix spec (inviting an
-//! already-joined user errors harmlessly; joining an already-joined room
-//! just succeeds; kicking someone no longer in the room errors harmlessly).
+//! member of every one of these 9 rooms) to send the invites. Each agent
+//! then logs in with its own just-registered password and joins normally —
+//! idempotent per the Matrix spec (inviting an already-joined user errors
+//! harmlessly; joining an already-joined room just succeeds).
+//!
+//! Cleaning up the old `@charradissa` account's stale membership does NOT
+//! use a plain kick, or even a demote-then-kick: these rooms were manually
+//! recreated after a Matrix reset and left `@charradissa` at PL 100, tied
+//! with pierre-luc's own PL 100, and Synapse's power-level auth rule
+//! forbids touching a target whose power level is *equal to* the actor's
+//! (not just greater) — both approaches 403 unconditionally. Instead this
+//! mints a throwaway Synapse server-admin account (via the same
+//! shared-secret registration API, `admin: true`), uses it to obtain a
+//! token acting *as* `@charradissa` directly (`/_synapse/admin/v1/users/
+//! {user}/login`), and has it leave each room on its own behalf — a
+//! self-leave needs no power-level comparison at all. The 8th room
+//! (`charradissa`'s own) is excluded from this cleanup: the new
+//! independent charradissa component agent reuses the same username, so
+//! its membership there is the real agent, not a ghost.
 //!
 //! Deliberately stores passwords, not access tokens: a token can go stale
 //! after a Matrix reset in a way a stored password can't (each agent's own
@@ -132,6 +144,23 @@ mod tests {
         let names: Vec<&str> = component_rooms().map(|(n, _)| *n).collect();
         assert!(!names.contains(&"guilhem"));
         assert_eq!(names.len(), 8);
+    }
+
+    /// The old-@charradissa cleanup loop in `run()` filters component_rooms()
+    /// down to exclude "charradissa" itself — that room's @charradissa
+    /// membership is the real independent agent (registered earlier in the
+    /// same run via the same username), not a ghost. Regression test for a
+    /// bug found live: the unfiltered cleanup evicted the real agent from
+    /// its own room.
+    #[test]
+    fn cleanup_rooms_excludes_charradissas_own_room() {
+        let names: Vec<&str> = component_rooms()
+            .filter(|(name, _)| *name != "charradissa")
+            .map(|(n, _)| *n)
+            .collect();
+        assert!(!names.contains(&"charradissa"));
+        assert!(!names.contains(&"guilhem"));
+        assert_eq!(names.len(), 7);
     }
 
     /// A genuine 404 from OpenBao means the secret doesn't exist yet — safe
@@ -325,52 +354,95 @@ async fn matrix_join(client: &reqwest::Client, homeserver: &str, token: &str, ro
     Ok(())
 }
 
-/// Kick `user_id` from `room_id` using `token`. Used with pierre-luc's own
-/// token (PL 100) to remove the pre-rename `@charradissa` account (PL 50)
-/// from the 8 component rooms — pierre-luc's PL exceeds both the room's
-/// kick-required PL and charradissa's own PL, so this succeeds regardless
-/// of which identity is being cleaned up. Treated as best-effort: kicking
-/// someone no longer in the room errors harmlessly, making this safe to
-/// rerun once the cleanup has already happened.
-/// Kicking requires the actor's power level to be strictly greater than the
-/// target's (Matrix auth rule) — equal power cannot kick equal power.
-/// Confirmed live: these rooms were manually recreated after a Matrix reset
-/// and don't follow create_room_with_owner's intended PL scheme — the old
-/// @charradissa account ended up at PL 100, the same as pierre-luc, so a
-/// plain kick 403s every time. Demote the target to PL 0 first (a
-/// power_levels state event, which only requires the actor to meet the
-/// room's own `events.m.room.power_levels` threshold, unrelated to the
-/// kick-vs-target comparison), then kick.
-async fn matrix_demote_and_kick(client: &reqwest::Client, homeserver: &str, token: &str, room_id: &str, user_id: &str, reason: &str) -> anyhow::Result<()> {
-    let get_resp = client
-        .get(format!("{}/_matrix/client/v3/rooms/{}/state/m.room.power_levels", homeserver, urlencode(room_id)))
-        .header("Authorization", format!("Bearer {}", token))
-        .send().await?;
-    if !get_resp.status().is_success() {
-        anyhow::bail!("get power_levels for {} failed: {}", room_id, get_resp.status());
-    }
-    let mut power_levels: serde_json::Value = get_resp.json().await?;
+/// Register a throwaway Synapse server-admin account via the shared-secret
+/// registration API (`admin: true`), returning its (user_id, access_token)
+/// directly from the registration response (no separate login needed).
+async fn admin_register(client: &reqwest::Client, homeserver: &str, shared_secret: &str) -> anyhow::Result<(String, String)> {
+    let nonce_resp: serde_json::Value = client
+        .get(format!("{}/_synapse/admin/v1/register", homeserver))
+        .send().await?
+        .json().await?;
+    let nonce = nonce_resp["nonce"].as_str()
+        .ok_or_else(|| anyhow::anyhow!("no nonce in registration response"))?;
 
-    let current = power_levels["users"][user_id].as_i64();
-    if current.is_some() && current != Some(0) {
-        power_levels["users"][user_id] = serde_json::json!(0);
-        let put_resp = client
-            .put(format!("{}/_matrix/client/v3/rooms/{}/state/m.room.power_levels", homeserver, urlencode(room_id)))
-            .header("Authorization", format!("Bearer {}", token))
-            .json(&power_levels)
-            .send().await?;
-        if !put_resp.status().is_success() {
-            anyhow::bail!("demote {} in {} failed: {}", user_id, room_id, put_resp.status());
-        }
-    }
+    let username = format!("cleanup-admin-{}", &generate_password()[..12]);
+    let password = generate_password();
+    let mac = registration_mac(shared_secret, nonce, &username, &password, true);
+    let resp: serde_json::Value = client
+        .post(format!("{}/_synapse/admin/v1/register", homeserver))
+        .json(&serde_json::json!({
+            "nonce": nonce,
+            "username": username,
+            "password": password,
+            "admin": true,
+            "mac": mac,
+        }))
+        .send().await?
+        .json().await?;
+    let user_id = resp["user_id"].as_str()
+        .ok_or_else(|| anyhow::anyhow!("admin_register failed: no user_id in response: {:?}", resp))?
+        .to_string();
+    let token = resp["access_token"].as_str()
+        .ok_or_else(|| anyhow::anyhow!("admin_register failed: no access_token in response: {:?}", resp))?
+        .to_string();
+    Ok((user_id, token))
+}
 
+/// Deactivate (and erase) the throwaway admin account created by
+/// `admin_register`, using its own token.
+async fn admin_deactivate_self(client: &reqwest::Client, homeserver: &str, admin_token: &str, admin_user_id: &str) -> anyhow::Result<()> {
     let resp = client
-        .post(format!("{}/_matrix/client/v3/rooms/{}/kick", homeserver, urlencode(room_id)))
-        .header("Authorization", format!("Bearer {}", token))
-        .json(&serde_json::json!({ "user_id": user_id, "reason": reason }))
+        .post(format!("{}/_synapse/admin/v1/deactivate/{}", homeserver, urlencode(admin_user_id)))
+        .header("Authorization", format!("Bearer {}", admin_token))
+        .json(&serde_json::json!({ "erase": true }))
         .send().await?;
     if !resp.status().is_success() {
-        anyhow::bail!("kick {} from {} failed: {}", user_id, room_id, resp.status());
+        anyhow::bail!("admin_deactivate_self {} failed: {}", admin_user_id, resp.status());
+    }
+    Ok(())
+}
+
+/// Use the Synapse admin API to obtain an access token acting as `user_id`,
+/// bypassing normal login (no password needed). Requires `admin_token` to
+/// belong to a server admin.
+async fn admin_login_as(client: &reqwest::Client, homeserver: &str, admin_token: &str, user_id: &str) -> anyhow::Result<String> {
+    let resp: serde_json::Value = client
+        .post(format!("{}/_synapse/admin/v1/users/{}/login", homeserver, urlencode(user_id)))
+        .header("Authorization", format!("Bearer {}", admin_token))
+        .json(&serde_json::json!({}))
+        .send().await?
+        .json().await?;
+    resp["access_token"].as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow::anyhow!("admin_login_as {} failed: no access_token in response: {:?}", user_id, resp))
+}
+
+/// Remove `user_id` from `room_id` by puppeting it directly (via
+/// `admin_login_as`) and calling `/leave` on its own behalf. Self-leave
+/// requires no power-level comparison at all, unlike kicking.
+///
+/// A plain kick (even after demoting the target to power level 0 first)
+/// does not work here: Synapse's power-level auth rule forbids an actor
+/// from touching a target whose power level is *equal to* the actor's own
+/// (`"You don't have permission to remove ops level equal to your own"`),
+/// not just greater. Confirmed live: these rooms were manually recreated
+/// after a Matrix reset and don't follow `create_room_with_owner`'s
+/// intended PL scheme — the old `@charradissa` account ended up at PL 100,
+/// the same as pierre-luc's, so both a plain kick and a demote-then-kick
+/// 403 every time. Puppeting the target and having it leave sidesteps the
+/// whole power-level question.
+/// Best-effort: leaving a room the account is no longer in errors
+/// harmlessly, making this safe to rerun once the cleanup has already
+/// happened.
+async fn matrix_leave_as(client: &reqwest::Client, homeserver: &str, admin_token: &str, user_id: &str, room_id: &str) -> anyhow::Result<()> {
+    let user_token = admin_login_as(client, homeserver, admin_token, user_id).await?;
+    let resp = client
+        .post(format!("{}/_matrix/client/v3/rooms/{}/leave", homeserver, urlencode(room_id)))
+        .header("Authorization", format!("Bearer {}", user_token))
+        .json(&serde_json::json!({}))
+        .send().await?;
+    if !resp.status().is_success() {
+        anyhow::bail!("leave {} from {} failed: {}", user_id, room_id, resp.status());
     }
     Ok(())
 }
@@ -426,15 +498,25 @@ pub async fn run(homeserver: &str, bao_addr: &str) -> anyhow::Result<()> {
     // The pre-rename @charradissa account (not @charradissa-relay, which has
     // never held membership anywhere) is still an actual member of these 8
     // rooms — clean it up now that each room has its own real agent.
+    // Skip the "charradissa" room itself: the new independent charradissa
+    // component agent registered above reuses this same username, so its
+    // membership there is legitimate, not a ghost.
     let old_charradissa_id = "@charradissa:occitane.guilhem";
-    for (name, room_id) in component_rooms() {
-        if let Err(e) = matrix_demote_and_kick(
-            &client, homeserver, &pierre_luc_token, room_id, old_charradissa_id,
-            "component agents now run independent Matrix sessions — see Occitan#per-agent-matrix-independence",
-        ).await {
-            tracing::warn!("bootstrap-matrix: kick {} from {} ({}) failed (continuing — may already be gone): {}", old_charradissa_id, name, room_id, e);
-        } else {
-            tracing::info!("bootstrap-matrix: kicked {} from {} ({})", old_charradissa_id, name, room_id);
+    let cleanup_rooms: Vec<_> = component_rooms().filter(|(name, _)| *name != "charradissa").collect();
+    if !cleanup_rooms.is_empty() {
+        let (admin_user_id, admin_token) = admin_register(&client, homeserver, &shared_secret).await?;
+        for (name, room_id) in &cleanup_rooms {
+            if let Err(e) = matrix_leave_as(&client, homeserver, &admin_token, old_charradissa_id, room_id).await {
+                tracing::warn!("bootstrap-matrix: remove {} from {} ({}) failed (continuing — may already be gone): {}", old_charradissa_id, name, room_id, e);
+            } else {
+                tracing::info!("bootstrap-matrix: removed {} from {} ({})", old_charradissa_id, name, room_id);
+            }
+        }
+        // Best-effort: the throwaway admin's own deactivation failing does
+        // not affect correctness of the cleanup above, just leaves an unused
+        // account behind (harmless — it's re-derivable and re-run-safe).
+        if let Err(e) = admin_deactivate_self(&client, homeserver, &admin_token, &admin_user_id).await {
+            tracing::warn!("bootstrap-matrix: deactivate throwaway admin failed (non-fatal): {}", e);
         }
     }
 
