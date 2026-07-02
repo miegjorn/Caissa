@@ -31,6 +31,7 @@ hmac = { workspace = true }
 sha1 = { workspace = true }
 hex = { workspace = true }
 fondament-core = { workspace = true }
+pulldown-cmark = { workspace = true }
 
 [dev-dependencies]
 wiremock = "0.6"

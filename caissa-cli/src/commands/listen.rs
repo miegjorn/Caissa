@@ -76,6 +76,9 @@ struct ListenState {
     /// Updated in place on every successful login/re-login; read by both the
     /// sync loop and the post-reply call.
     matrix_access_token: Arc<tokio::sync::RwLock<String>>,
+    /// Kroki server URL for rendering ```mermaid blocks in a reply as PNG
+    /// images instead of posting raw diagram source as text.
+    kroki_url: String,
 }
 
 /// A running agent-sidecar.js child process for one room.
@@ -255,6 +258,8 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
             .unwrap_or_else(|_| "http://synapse.occitan-system.svc.cluster.local:8008".into()),
         matrix_password: read_matrix_password(),
         matrix_access_token: Arc::new(tokio::sync::RwLock::new(String::new())),
+        kroki_url: std::env::var("KROKI_URL")
+            .unwrap_or_else(|_| "http://kroki.occitan-system.svc.cluster.local:8000".into()),
     });
 
     tokio::spawn(spawn_idle_reaper(Arc::clone(&state.room_sessions)));
@@ -437,7 +442,7 @@ async fn matrix_sync(
     Ok((next_batch, events))
 }
 
-async fn matrix_post(homeserver: &str, token: &str, room_id: &str, body: &str) -> anyhow::Result<()> {
+async fn matrix_post_body(homeserver: &str, token: &str, room_id: &str, body: &serde_json::Value) -> anyhow::Result<()> {
     let txn = uuid::Uuid::new_v4();
     let url = format!(
         "{}/_matrix/client/v3/rooms/{}/send/m.room.message/{}",
@@ -446,12 +451,223 @@ async fn matrix_post(homeserver: &str, token: &str, room_id: &str, body: &str) -
     let resp = reqwest::Client::new()
         .put(&url)
         .header("Authorization", format!("Bearer {}", token))
-        .json(&serde_json::json!({ "msgtype": "m.text", "body": body }))
+        .json(body)
         .send().await?;
     if !resp.status().is_success() {
         anyhow::bail!("matrix_post failed: {}", resp.status());
     }
     Ok(())
+}
+
+/// Render markdown to HTML for the `formatted_body` field, matching Matrix's
+/// dual plain/HTML message convention (`Charradissa/charradissa-matrix/src/client.rs`'s
+/// `markdown_body`, ported here since these 9 agents post directly rather
+/// than through Charradissa's relay). Only includes `formatted_body` when
+/// the rendering actually adds markup beyond a plain paragraph wrap — avoids
+/// cluttering plain-prose messages with an identical HTML copy.
+fn markdown_body(content: &str) -> serde_json::Value {
+    let html = render_markdown(content);
+    if html_differs_from_plain(content, &html) {
+        serde_json::json!({
+            "msgtype": "m.text",
+            "body": content,
+            "format": "org.matrix.custom.html",
+            "formatted_body": html,
+        })
+    } else {
+        serde_json::json!({ "msgtype": "m.text", "body": content })
+    }
+}
+
+fn render_markdown(content: &str) -> String {
+    use pulldown_cmark::{html, Options, Parser};
+    let opts = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
+    let parser = Parser::new_ext(content, opts);
+    let mut html_out = String::new();
+    html::push_html(&mut html_out, parser);
+    html_out
+}
+
+fn html_differs_from_plain(plain: &str, html: &str) -> bool {
+    let trimmed = html.trim();
+    let unwrapped = trimmed
+        .strip_prefix("<p>")
+        .and_then(|s| s.strip_suffix("</p>"))
+        .unwrap_or(trimmed);
+    unwrapped != plain.trim()
+}
+
+/// Extract all ` ```mermaid ... ``` ` code blocks from a reply, returning
+/// `(text_with_blocks_removed, diagram_sources)`. Ported from
+/// `Charradissa/charradissa-core/src/mermaid.rs`'s `extract_mermaid_blocks`,
+/// extended to also strip the blocks from the text (Charradissa's own hook
+/// left the raw text alone and posted the image as a side-effect; here we
+/// replace the raw diagram source with the rendered image instead of posting
+/// both).
+fn extract_and_strip_mermaid_blocks(content: &str) -> (String, Vec<String>) {
+    let mut diagrams = Vec::new();
+    let mut remaining = String::new();
+    let open = "```mermaid";
+    let close = "```";
+    let mut rest = content;
+    while let Some(start) = rest.find(open) {
+        remaining.push_str(&rest[..start]);
+        let after_open = &rest[start + open.len()..];
+        let body = after_open.trim_start_matches('\n').trim_start_matches('\r');
+        if let Some(end) = body.find(close) {
+            let diagram = body[..end].trim();
+            if !diagram.is_empty() {
+                diagrams.push(diagram.to_string());
+            }
+            rest = &body[end + close.len()..];
+        } else {
+            // Unterminated block — leave the rest of the content as-is rather
+            // than silently dropping it.
+            remaining.push_str(&rest[start..]);
+            rest = "";
+            break;
+        }
+    }
+    remaining.push_str(rest);
+    (remaining.trim().to_string(), diagrams)
+}
+
+/// POST the diagram source to Kroki and return the rendered PNG bytes.
+/// Ported from `Charradissa/charradissa-core/src/mermaid.rs`'s `render_svg`,
+/// requesting `png` instead of `svg` — Element renders inline images more
+/// consistently as PNG than as SVG in practice.
+async fn render_diagram_png(kroki_url: &str, diagram: &str) -> anyhow::Result<Vec<u8>> {
+    let url = format!("{}/mermaid/png", kroki_url);
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .header("Content-Type", "text/plain")
+        .body(diagram.to_string())
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("Kroki request failed: {}", e))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Kroki returned {}: {}", status, body);
+    }
+    Ok(resp.bytes().await.map(|b| b.to_vec())?)
+}
+
+async fn matrix_upload_media(homeserver: &str, token: &str, content_type: &str, data: Vec<u8>) -> anyhow::Result<String> {
+    let url = format!("{}/_matrix/media/v3/upload", homeserver);
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", content_type)
+        .body(data)
+        .send().await?;
+    let json: serde_json::Value = resp.json().await?;
+    json["content_uri"].as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow::anyhow!("upload_media: no content_uri in response: {:?}", json))
+}
+
+async fn matrix_send_image(homeserver: &str, token: &str, room_id: &str, mxc_uri: &str, filename: &str) -> anyhow::Result<()> {
+    let body = serde_json::json!({
+        "msgtype": "m.image",
+        "body": filename,
+        "url": mxc_uri,
+        "info": { "mimetype": "image/png" },
+    });
+    matrix_post_body(homeserver, token, room_id, &body).await
+}
+
+/// Post an agent's reply with markdown rendering and mermaid-diagram
+/// interception: any ` ```mermaid ` blocks are rendered via Kroki and posted
+/// as PNG images (via a real Matrix media upload) in place of the raw
+/// diagram source; whatever text remains (if any) is posted separately with
+/// markdown → HTML rendering. Diagram rendering is best-effort — a Kroki
+/// failure logs a warning and falls back to posting the raw diagram source
+/// as part of the text, so a Kroki outage never swallows a reply.
+async fn post_reply(homeserver: &str, token: &str, room_id: &str, kroki_url: &str, reply: &str) -> anyhow::Result<()> {
+    let (mut text, diagrams) = extract_and_strip_mermaid_blocks(reply);
+
+    for (i, diagram) in diagrams.iter().enumerate() {
+        match render_diagram_png(kroki_url, diagram).await {
+            Ok(png) => {
+                let mxc = matrix_upload_media(homeserver, token, "image/png", png).await?;
+                let filename = if diagrams.len() == 1 { "diagram.png".to_string() } else { format!("diagram-{}.png", i + 1) };
+                matrix_send_image(homeserver, token, room_id, &mxc, &filename).await?;
+            }
+            Err(e) => {
+                tracing::warn!("post_reply: kroki render failed for diagram {} (falling back to raw source in text): {}", i + 1, e);
+                if !text.is_empty() {
+                    text.push_str("\n\n");
+                }
+                text.push_str(&format!("```mermaid\n{}\n```", diagram));
+            }
+        }
+    }
+
+    if !text.is_empty() {
+        matrix_post_body(homeserver, token, room_id, &markdown_body(&text)).await?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod matrix_rendering_tests {
+    use super::*;
+
+    #[test]
+    fn plain_prose_has_no_formatted_body() {
+        let body = markdown_body("hello world");
+        assert!(body.get("formatted_body").is_none());
+        assert!(body.get("format").is_none());
+        assert_eq!(body["body"], "hello world");
+    }
+
+    #[test]
+    fn markdown_prose_gets_formatted_body() {
+        let body = markdown_body("**bold** text");
+        assert_eq!(body["format"], "org.matrix.custom.html");
+        assert!(body["formatted_body"].as_str().unwrap().contains("<strong>bold</strong>"));
+        assert_eq!(body["body"], "**bold** text");
+    }
+
+    #[test]
+    fn extracts_single_mermaid_block_and_strips_it() {
+        let msg = "look at this\n```mermaid\ngraph TD\n  A-->B\n```\ncool right?";
+        let (text, diagrams) = extract_and_strip_mermaid_blocks(msg);
+        assert_eq!(diagrams, vec!["graph TD\n  A-->B"]);
+        assert_eq!(text, "look at this\n\ncool right?");
+    }
+
+    #[test]
+    fn extracts_multiple_mermaid_blocks() {
+        let msg = "```mermaid\nflowchart LR\n  A-->B\n```\nand\n```mermaid\nsequenceDiagram\n  A->>B: hi\n```";
+        let (text, diagrams) = extract_and_strip_mermaid_blocks(msg);
+        assert_eq!(diagrams.len(), 2);
+        assert_eq!(text, "and");
+    }
+
+    #[test]
+    fn ignores_non_mermaid_code_blocks() {
+        let msg = "```rust\nfn main() {}\n```";
+        let (text, diagrams) = extract_and_strip_mermaid_blocks(msg);
+        assert!(diagrams.is_empty());
+        assert_eq!(text, msg);
+    }
+
+    #[test]
+    fn plain_text_with_no_diagrams_passes_through_unchanged() {
+        let (text, diagrams) = extract_and_strip_mermaid_blocks("hello world");
+        assert!(diagrams.is_empty());
+        assert_eq!(text, "hello world");
+    }
+
+    #[test]
+    fn reply_that_is_only_a_diagram_leaves_empty_text() {
+        let (text, diagrams) = extract_and_strip_mermaid_blocks("```mermaid\ngraph TD\n  A-->B\n```");
+        assert_eq!(diagrams, vec!["graph TD\n  A-->B"]);
+        assert_eq!(text, "");
+    }
 }
 
 /// Background task: logs in as this pod's own Matrix user, long-polls
@@ -508,7 +724,7 @@ async fn run_matrix_client_loop(state: Arc<ListenState>) {
                         match run_matrix_reply(&state, &req).await {
                             Ok(reply) => {
                                 let post_token = state.matrix_access_token.read().await.clone();
-                                if let Err(e) = matrix_post(&state.matrix_homeserver, &post_token, &state.matrix_room_id, &reply).await {
+                                if let Err(e) = post_reply(&state.matrix_homeserver, &post_token, &state.matrix_room_id, &state.kroki_url, &reply).await {
                                     tracing::error!("matrix_client: post failed: {}", e);
                                 }
                             }

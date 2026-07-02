@@ -640,6 +640,8 @@ spec:
               value: {{ .Values.matrix.roomId | quote }}
             - name: MATRIX_HOMESERVER
               value: {{ .Values.matrix.homeserver | quote }}
+            - name: KROKI_URL
+              value: "http://kroki.occitan-system.svc.cluster.local:8000"
           volumeMounts:
             - name: caissa-config
               mountPath: /workspace/caissa.toml
