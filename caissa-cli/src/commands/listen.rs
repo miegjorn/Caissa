@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::collections::HashMap;
 use caissa_core::config::load_config;
-use caissa_core::agent::{load_fondament_def, tool_to_claude_name};
+use caissa_core::agent::{fetch_fondament_def, tool_to_claude_name};
 use super::handoff::{is_handoff_message, parse_handoff_message, HandoffRequest};
 
 #[derive(Clone)]
@@ -52,6 +52,9 @@ struct ListenState {
     charradissa_mcp_url: String,
     nervi_mcp_url: String,
     fondament_path: String,
+    /// fondament-server URL — resolved live at runtime via fetch_fondament_def,
+    /// never a vendored local copy. See caissa_core::agent::fetch_fondament_def.
+    fondament_url: String,
     generation: String,
     /// Matrix room ID for SRE alert posts. Empty string = alerting disabled.
     sre_matrix_room_id: String,
@@ -246,6 +249,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         charradissa_mcp_url: config.charradissa_mcp_url,
         nervi_mcp_url: config.nervi_mcp_url,
         fondament_path: config.fondament_path,
+        fondament_url: config.fondament_url,
         generation: config.generation,
         sre_matrix_room_id: std::env::var("SRE_MATRIX_ROOM_ID").unwrap_or_default(),
         backlog_matrix_room_id: std::env::var("BACKLOG_MATRIX_ROOM_ID").unwrap_or_default(),
@@ -1410,7 +1414,7 @@ Prior art exists. Other systems have solved similar problems. Not consulting it 
 form of local-optimum convergence. This phase is mandatory.
 
 1. Read the system-defence axioms before evaluating anything:
-   `cat /fondament/definitions/fondament/system-defence.md`
+   `curl -s http://fondament.occitan-system.svc.cluster.local:7800/file/fondament/system-defence.md`
 
 2. For each architecturally non-obvious finding from Phase 2 (patterns, recurring signals,
    structural gaps — not simple bug fixes), search the web for prior art:
@@ -1760,7 +1764,7 @@ component agents. This is where synthesis becomes motion.
 
 ## STEP 1 — Load system-defence axioms and context graph
 
-`cat /fondament/definitions/fondament/system-defence.md`
+`curl -s http://fondament.occitan-system.svc.cluster.local:7800/file/fondament/system-defence.md`
 
 Read the axioms and risk classification table before evaluating anything.
 
@@ -1880,7 +1884,7 @@ async fn run_mission_pulse(state: &ListenState) -> anyhow::Result<()> {
     std::fs::write(&mcp_path, &mcp_config)?;
 
     let prompt = build_mission_pulse_prompt(&state.fondament_path);
-    let tools = guilhem_allowed_tools(&state.fondament_path).join(",");
+    let tools = guilhem_allowed_tools(&state.fondament_url).await.join(",");
 
     let output = tokio::process::Command::new("claude")
         .args([
@@ -2075,7 +2079,7 @@ async fn run_intake(state: &ListenState, description: &str) -> anyhow::Result<()
     std::fs::write(&mcp_path, &mcp_config)?;
 
     let prompt = build_intake_prompt(&state.fondament_path, description);
-    let tools = guilhem_allowed_tools(&state.fondament_path).join(",");
+    let tools = guilhem_allowed_tools(&state.fondament_url).await.join(",");
 
     let output = tokio::process::Command::new("claude")
         .args([
@@ -2321,17 +2325,17 @@ async fn handle_matrix_reply(
 /// that the bake-in doesn't require a code change (only an image change), but
 /// skills are not currently baked into the image. See install.md for details.
 ///
-/// Falls back to a bare prompt if the definition file is missing (e.g. outside
-/// the built image, in local dev without a Fondament checkout at fondament_path).
-fn resolve_guilhem_prompt(fondament_path: &str, generation: &str, room_id: &str) -> (String, Vec<String>, std::collections::HashMap<String, String>, Option<u32>) {
-    let (role_context, skills, models, modifiers) = match load_fondament_def(fondament_path, generation) {
+/// Falls back to a bare prompt if fondament-server is unreachable or the
+/// definition doesn't exist there.
+async fn resolve_guilhem_prompt(fondament_url: &str, generation: &str, room_id: &str) -> (String, Vec<String>, std::collections::HashMap<String, String>, Option<u32>) {
+    let (role_context, skills, models, modifiers) = match fetch_fondament_def(fondament_url, generation).await {
         Ok(def) => {
             let skills = def.skill_ids();
             let models = def.models;
             (def.context, skills, models, def.modifiers)
         }
         Err(e) => {
-            tracing::warn!("fondament def not found for '{}' at '{}': {}; using bare prompt", generation, fondament_path, e);
+            tracing::warn!("fondament def not found for '{}' via '{}': {}; using bare prompt", generation, fondament_url, e);
             (String::from("You are Guilhem, the org agent for the Occitan stack."), vec![], std::collections::HashMap::new(), vec![])
         }
     };
@@ -2425,7 +2429,7 @@ async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::
             // The sidecar process is long-lived (one per room, reused across
             // messages) — always attach the full tool/MCP set so capability
             // doesn't get frozen at whatever the room's first message needed.
-            let (mut system_prompt, skills, def_models, thinking_budget) = resolve_guilhem_prompt(&state.fondament_path, &state.generation, &req.room_id);
+            let (mut system_prompt, skills, def_models, thinking_budget) = resolve_guilhem_prompt(&state.fondament_url, &state.generation, &req.room_id).await;
 
             // Bridge context across session respawns (idle-reap, pod restart) via
             // the persistent SessionGraph — only needed at spawn time, since a
@@ -2442,7 +2446,7 @@ async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::
             let init = SidecarInit {
                 system_prompt,
                 model,
-                allowed_tools: guilhem_allowed_tools(&state.fondament_path),
+                allowed_tools: guilhem_allowed_tools(&state.fondament_url).await,
                 skills,
                 mcp_servers: guilhem_mcp_servers(state),
                 max_thinking_tokens: thinking_budget,
@@ -2491,11 +2495,11 @@ fn guilhem_mcp_servers(state: &ListenState) -> serde_json::Value {
     })
 }
 
-/// The tool allow-list granted to every Guilhem sidecar session. Loaded from
-/// the Fondament `guilhem` definition when available; hardcoded fallback for
-/// local dev without a Fondament checkout.
-fn guilhem_allowed_tools(fondament_path: &str) -> Vec<String> {
-    if let Ok(def) = load_fondament_def(fondament_path, "guilhem") {
+/// The tool allow-list granted to every Guilhem sidecar session. Loaded live
+/// from fondament-server's `guilhem` definition when reachable; hardcoded
+/// fallback for local dev without fondament-server running.
+async fn guilhem_allowed_tools(fondament_url: &str) -> Vec<String> {
+    if let Ok(def) = fetch_fondament_def(fondament_url, "guilhem").await {
         let from_def: Vec<String> = def.tools.always_on.iter()
             .map(tool_to_claude_name)
             .collect();
@@ -2670,9 +2674,9 @@ fn component_mcp_servers(state: &ListenState) -> serde_json::Value {
     servers
 }
 
-fn component_allowed_tools(fondament_path: &str, component: &str) -> Vec<String> {
+async fn component_allowed_tools(fondament_url: &str, component: &str) -> Vec<String> {
     let def_name = format!("{}-agent", component);
-    if let Ok(def) = load_fondament_def(fondament_path, &def_name) {
+    if let Ok(def) = fetch_fondament_def(fondament_url, &def_name).await {
         let from_def: Vec<String> = def.tools.always_on.iter()
             .map(tool_to_claude_name)
             .collect();
@@ -2704,12 +2708,12 @@ fn component_allowed_tools(fondament_path: &str, component: &str) -> Vec<String>
 /// grok* via basic xAI API (no MCP/tools in basic path; use endpoint for full agentic).
 async fn run_component_agent(state: &ListenState, component: &str, payload: &str) -> anyhow::Result<()> {
     let def_name = format!("{component}-agent");
-    let effective_model = match load_fondament_def(&state.fondament_path, &def_name) {
+    let effective_model = match fetch_fondament_def(&state.fondament_url, &def_name).await {
         Ok(def) => def.default_model.unwrap_or_else(|| state.chronicle_model.clone()),
         Err(_) => state.chronicle_model.clone(),
     };
 
-    let persona_context = load_component_persona(state, component);
+    let persona_context = load_component_persona(state, component).await;
     let prompt = build_component_agent_prompt(component, &state.farga_project, payload, &persona_context);
 
     if effective_model.starts_with("grok") || effective_model.starts_with("xai") {
@@ -2754,7 +2758,7 @@ async fn run_component_agent(state: &ListenState, component: &str, payload: &str
         let mcp_path = std::env::temp_dir().join(format!("{component}-agent-mcp.json"));
         std::fs::write(&mcp_path, &mcp_config)?;
 
-        let tools = component_allowed_tools(&state.fondament_path, component).join(",");
+        let tools = component_allowed_tools(&state.fondament_url, component).await.join(",");
 
         let output = tokio::process::Command::new("claude")
             .args([
@@ -2786,9 +2790,9 @@ async fn run_component_agent(state: &ListenState, component: &str, payload: &str
     Ok(())
 }
 
-fn load_component_persona(state: &ListenState, component: &str) -> String {
+async fn load_component_persona(state: &ListenState, component: &str) -> String {
     let def_name = format!("{component}-agent");
-    match load_fondament_def(&state.fondament_path, &def_name) {
+    match fetch_fondament_def(&state.fondament_url, &def_name).await {
         Ok(def) => def.context,
         Err(_) => format!("You are the {component} component agent for the Occitan stack."),
     }
@@ -3350,14 +3354,14 @@ async fn handle_turn(
 
 async fn run_turn(state: &ListenState, req: &TurnReq) -> anyhow::Result<String> {
     // Skills come from the Fondament def (same source as the Matrix path); fall
-    // back to none if the definition isn't present (e.g. local dev without a
-    // Fondament checkout at fondament_path).
-    let skills = match load_fondament_def(&state.fondament_path, &state.generation) {
+    // back to none if fondament-server is unreachable or the definition
+    // doesn't exist there.
+    let skills = match fetch_fondament_def(&state.fondament_url, &state.generation).await {
         Ok(def) => def.skill_ids(),
         Err(e) => {
             tracing::warn!(
-                "fondament def not found for '{}' at '{}': {}; turn runs without skills",
-                state.generation, state.fondament_path, e
+                "fondament def not found for '{}' via '{}': {}; turn runs without skills",
+                state.generation, state.fondament_url, e
             );
             vec![]
         }
@@ -3366,7 +3370,7 @@ async fn run_turn(state: &ListenState, req: &TurnReq) -> anyhow::Result<String> 
     let init = SidecarInit {
         system_prompt: req.system_prompt.clone(),
         model: req.model.clone(),
-        allowed_tools: guilhem_allowed_tools(&state.fondament_path),
+        allowed_tools: guilhem_allowed_tools(&state.fondament_url).await,
         skills,
         mcp_servers: guilhem_mcp_servers(state),
         // Amassada assembles the full system_prompt for this path itself (it

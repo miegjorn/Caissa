@@ -9,9 +9,16 @@ pub struct CaissaConfig {
     pub pii_patterns: Vec<String>,
     /// Base directory for per-session workspace volumes. Default: "./workspaces"
     pub workspaces_dir: String,
-    /// Path to the Fondament repo root. Used by `caissa build` to resolve agent definitions.
+    /// Path to the Fondament repo root. Used by `caissa build` to resolve agent
+    /// definitions at image-build time, from a fresh local checkout.
     #[serde(default = "default_fondament_path")]
     pub fondament_path: String,
+    /// fondament-server URL. Used by `caissa listen` to resolve agent
+    /// definitions at *runtime*, live, instead of a vendored local copy —
+    /// this is the single source of truth once a pod is running (see
+    /// caissa_core::agent::fetch_fondament_def).
+    #[serde(default = "default_fondament_url")]
+    pub fondament_url: String,
     /// Container registry prefix for `caissa push` (e.g. "ghcr.io/miegjorn").
     /// When absent, the local tag is pushed as-is.
     #[serde(default)]
@@ -76,6 +83,10 @@ fn default_fondament_path() -> String {
     "../Fondament".into()
 }
 
+fn default_fondament_url() -> String {
+    "http://fondament.occitan-system.svc.cluster.local:7800".into()
+}
+
 fn default_generation() -> String {
     "guilhem".into()
 }
@@ -125,6 +136,7 @@ impl Default for CaissaConfig {
             pii_patterns: vec!["email".into(), "phone".into()],
             workspaces_dir: "workspaces".into(),
             fondament_path: default_fondament_path(),
+            fondament_url: default_fondament_url(),
             registry: None,
             generation: default_generation(),
             farga_mcp_url: default_farga_mcp_url(),

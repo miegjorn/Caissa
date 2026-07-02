@@ -160,8 +160,12 @@ fn is_known_domain(name: &str) -> bool {
 
 // ── Definition loaders ────────────────────────────────────────────────────────
 
-/// Load a Fondament role definition (fondament/ directory).
-/// Used for generation personas and facets.
+/// Load a Fondament role definition (fondament/ directory) from a local
+/// checkout. Used only at image-build time (`caissa build`), where the
+/// caller has a fresh local Fondament checkout on disk — not by `caissa
+/// listen`, which fetches live from fondament-server instead (see
+/// `fetch_fondament_def`) so it never runs against a vendored, potentially
+/// stale copy.
 pub fn load_fondament_def(fondament_path: &str, name: &str) -> anyhow::Result<FondamentDef> {
     let path = Path::new(fondament_path)
         .join("definitions")
@@ -171,6 +175,24 @@ pub fn load_fondament_def(fondament_path: &str, name: &str) -> anyhow::Result<Fo
         .map_err(|e| anyhow::anyhow!("reading {}: {}", path.display(), e))?;
     serde_yaml::from_str(&text)
         .map_err(|e| anyhow::anyhow!("parsing {}: {}", path.display(), e))
+}
+
+/// Fetch a Fondament role definition live from fondament-server's `/raw/*id`
+/// endpoint. This is the runtime counterpart to `load_fondament_def`: no
+/// local copy, no staleness — fondament-server is rebuilt and redeployed on
+/// every push to Fondament's `definitions/` directory, so this always
+/// reflects the current source of truth.
+pub async fn fetch_fondament_def(fondament_url: &str, name: &str) -> anyhow::Result<FondamentDef> {
+    let url = format!("{}/raw/fondament/{}", fondament_url.trim_end_matches('/'), name);
+    let resp = reqwest::get(&url).await
+        .map_err(|e| anyhow::anyhow!("fetching {}: {}", url, e))?;
+    if !resp.status().is_success() {
+        anyhow::bail!("fondament-server returned {} for {}", resp.status(), url);
+    }
+    let text = resp.text().await
+        .map_err(|e| anyhow::anyhow!("reading response body from {}: {}", url, e))?;
+    serde_yaml::from_str(&text)
+        .map_err(|e| anyhow::anyhow!("parsing {}: {}", url, e))
 }
 
 /// Load a domain definition (domains/ directory).
@@ -357,6 +379,64 @@ mod tests {
         let yaml = "id: fondament/legacy\nkind: role\ncontext: |\n  You are a legacy agent.\n";
         let def: FondamentDef = serde_yaml::from_str(yaml).expect("parse def without modifiers");
         assert!(def.modifiers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fetch_fondament_def_parses_server_response() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::matchers::{method, path};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/raw/fondament/guilhem"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                "id: fondament/guilhem\nkind: role\ncontext: |\n  You are Guilhem.\nmodifiers:\n  - aporia\n",
+            ))
+            .mount(&mock_server)
+            .await;
+
+        let def = fetch_fondament_def(&mock_server.uri(), "guilhem")
+            .await
+            .expect("fetch must succeed");
+        assert_eq!(def.id, "fondament/guilhem");
+        assert_eq!(def.modifiers, vec!["aporia".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn fetch_fondament_def_404_is_err() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::matchers::{method, path};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/raw/fondament/nonexistent"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock_server)
+            .await;
+
+        let result = fetch_fondament_def(&mock_server.uri(), "nonexistent").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn fetch_fondament_def_trims_trailing_slash_on_base_url() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        use wiremock::matchers::{method, path};
+
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/raw/fondament/guilhem"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                "id: fondament/guilhem\nkind: role\ncontext: |\n  Hi.\n",
+            ))
+            .mount(&mock_server)
+            .await;
+
+        let url_with_slash = format!("{}/", mock_server.uri());
+        let def = fetch_fondament_def(&url_with_slash, "guilhem")
+            .await
+            .expect("fetch must succeed despite trailing slash");
+        assert_eq!(def.id, "fondament/guilhem");
     }
 
     #[test]

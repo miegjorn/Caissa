@@ -19,6 +19,11 @@ resources:
 farga:
   url: "http://farga.occitan-system.svc.cluster.local:7500"
 
+fondament:
+  # fondament-server — resolved live at runtime, not a vendored local copy.
+  # See caissa_core::agent::fetch_fondament_def.
+  url: "http://fondament.occitan-system.svc.cluster.local:7800"
+
 nervi:
   mcpUrl: "http://nervi.occitan-system.svc.cluster.local:8080/mcp"
 

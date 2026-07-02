@@ -18,6 +18,7 @@ data:
     pii_patterns = ["email", "phone"]
     workspaces_dir = "workspaces"
     fondament_path = "/fondament"
+    fondament_url = {{ $.Values.fondament.url | quote }}
     generation = "{{ .name }}-agent"
     farga_mcp_url = {{ $.Values.farga.url | quote | replace "\"" "" | printf "%s/mcp" | quote }}
     dispatcher_mcp_url = "http://dispatcher.agents.svc.cluster.local:9090/mcp"
@@ -126,9 +127,6 @@ spec:
               readOnly: true
             - name: creds
               mountPath: /creds
-            - name: fondament-defs
-              mountPath: /fondament/definitions/fondament
-              readOnly: true
           readinessProbe:
             httpGet:
               path: /health
@@ -144,9 +142,6 @@ spec:
         - name: creds
           emptyDir:
             medium: Memory
-        - name: fondament-defs
-          configMap:
-            name: fondament-component-defs
 ---
 apiVersion: v1
 kind: Service

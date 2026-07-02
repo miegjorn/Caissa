@@ -13,6 +13,10 @@ replicas: 1
 farga:
   url: "http://farga.occitan-system.svc.cluster.local:7500"
   project: occitan
+fondament:
+  # fondament-server — resolved live at runtime, not a vendored local copy.
+  # See caissa_core::agent::fetch_fondament_def.
+  url: "http://fondament.occitan-system.svc.cluster.local:7800"
 # Chronicle schedule — how often Guilhem wakes to observe and record.
 # Uses Argo Workflows CronWorkflow syntax (standard cron).
 # Kept infrequent to avoid token burn on quiet periods.
