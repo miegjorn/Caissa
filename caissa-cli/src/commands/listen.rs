@@ -67,6 +67,15 @@ struct ListenState {
     /// concurrent messages for the same room while allowing different rooms
     /// to run in parallel.
     room_sessions: Arc<tokio::sync::Mutex<HashMap<String, RoomSession>>>,
+    /// This pod's own Matrix identity. Empty room_id disables the sync loop
+    /// entirely (e.g. local dev without Matrix configured).
+    matrix_user: String,
+    matrix_room_id: String,
+    matrix_homeserver: String,
+    matrix_password: String,
+    /// Updated in place on every successful login/re-login; read by both the
+    /// sync loop and the post-reply call.
+    matrix_access_token: Arc<tokio::sync::RwLock<String>>,
 }
 
 /// A running agent-sidecar.js child process for one room.
@@ -232,10 +241,17 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         dream_model: config.dream_model,
         dream_matrix_room_id: std::env::var("DREAM_MATRIX_ROOM_ID").unwrap_or_default(),
         room_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        matrix_user: std::env::var("MATRIX_USER").unwrap_or_default(),
+        matrix_room_id: std::env::var("MATRIX_ROOM_ID").unwrap_or_default(),
+        matrix_homeserver: std::env::var("MATRIX_HOMESERVER")
+            .unwrap_or_else(|_| "http://synapse.occitan-system.svc.cluster.local:8008".into()),
+        matrix_password: read_matrix_password(),
+        matrix_access_token: Arc::new(tokio::sync::RwLock::new(String::new())),
     });
 
     tokio::spawn(spawn_idle_reaper(Arc::clone(&state.room_sessions)));
     tokio::spawn(run_nervi_loop_if_component(Arc::clone(&state)));
+    tokio::spawn(run_matrix_client_loop(Arc::clone(&state)));
 
     let app = Router::new()
         .route("/trigger/chronicle", post(handle_chronicle))
@@ -323,6 +339,186 @@ fn github_token_envs() -> Vec<(String, String)> {
             Some((key.to_string(), value.trim_matches('\'').to_string()))
         })
         .collect()
+}
+
+/// Reads the agent's own Matrix password from `/creds/matrix.env`, written by
+/// the fetch-tokens init container. Returns empty string if absent (local dev,
+/// or a pod that hasn't been given Matrix credentials yet) — matrix_client_loop
+/// treats an empty matrix_room_id/matrix_password as "feature disabled here".
+fn read_matrix_password() -> String {
+    let content = match std::fs::read_to_string("/creds/matrix.env") {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
+    content.lines()
+        .find_map(|line| {
+            let rest = line.strip_prefix("export MATRIX_PASSWORD=")?;
+            Some(rest.trim_matches('\'').to_string())
+        })
+        .unwrap_or_default()
+}
+
+async fn matrix_login(homeserver: &str, user: &str, password: &str) -> anyhow::Result<String> {
+    let client = reqwest::Client::new();
+    let resp: serde_json::Value = client
+        .post(format!("{}/_matrix/client/v3/login", homeserver))
+        .json(&serde_json::json!({
+            "type": "m.login.password",
+            "identifier": { "type": "m.id.user", "user": user },
+            "password": password,
+        }))
+        .send().await?
+        .json().await?;
+    resp["access_token"].as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow::anyhow!("matrix_login: no access_token in response: {:?}", resp))
+}
+
+fn matrix_pct(s: &str) -> String {
+    s.chars().map(|c| match c {
+        '!' | '#' | '@' | ':' | '/' | '?' | '&' | '=' | '+' | ' ' => format!("%{:02X}", c as u32),
+        _ => c.to_string(),
+    }).collect()
+}
+
+/// Long-poll `/sync` once. Returns the new `since` token and any
+/// `m.room.message` timeline events for `room_id`, `(sender, content)` pairs.
+/// A 401 with `M_UNKNOWN_TOKEN` is surfaced as `Err` so the caller can re-login.
+async fn matrix_sync(
+    homeserver: &str,
+    token: &str,
+    since: Option<&str>,
+    room_id: &str,
+) -> anyhow::Result<(String, Vec<(String, String)>)> {
+    let mut url = format!("{}/_matrix/client/v3/sync?timeout=30000", homeserver);
+    if let Some(s) = since {
+        url.push_str(&format!("&since={}", matrix_pct(s)));
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(40))
+        .build()?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send().await?;
+    if resp.status().as_u16() == 401 {
+        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+        if body["errcode"].as_str() == Some("M_UNKNOWN_TOKEN") {
+            anyhow::bail!("M_UNKNOWN_TOKEN");
+        }
+        anyhow::bail!("matrix_sync: 401: {:?}", body);
+    }
+    if !resp.status().is_success() {
+        anyhow::bail!("matrix_sync failed: {}", resp.status());
+    }
+    let body: serde_json::Value = resp.json().await?;
+    let next_batch = body["next_batch"].as_str()
+        .ok_or_else(|| anyhow::anyhow!("matrix_sync: no next_batch in response"))?
+        .to_string();
+
+    let mut events = Vec::new();
+    if let Some(timeline) = body["rooms"]["join"][room_id]["timeline"]["events"].as_array() {
+        for ev in timeline {
+            if ev["type"].as_str() == Some("m.room.message") {
+                let sender = ev["sender"].as_str().unwrap_or_default().to_string();
+                let content = ev["content"]["body"].as_str().unwrap_or_default().to_string();
+                events.push((sender, content));
+            }
+        }
+    }
+    Ok((next_batch, events))
+}
+
+async fn matrix_post(homeserver: &str, token: &str, room_id: &str, body: &str) -> anyhow::Result<()> {
+    let txn = uuid::Uuid::new_v4();
+    let url = format!(
+        "{}/_matrix/client/v3/rooms/{}/send/m.room.message/{}",
+        homeserver, matrix_pct(room_id), txn
+    );
+    let resp = reqwest::Client::new()
+        .put(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .json(&serde_json::json!({ "msgtype": "m.text", "body": body }))
+        .send().await?;
+    if !resp.status().is_success() {
+        anyhow::bail!("matrix_post failed: {}", resp.status());
+    }
+    Ok(())
+}
+
+/// Background task: logs in as this pod's own Matrix user, long-polls
+/// `/sync` for its one room, and calls `run_matrix_reply` in-process for
+/// every message not sent by itself. Re-logs-in automatically on
+/// `M_UNKNOWN_TOKEN`. Non-fatal at every layer — a Matrix outage degrades
+/// this to backoff-retry, never crashes the pod (the pod's cron/HTTP
+/// responsibilities are unaffected).
+async fn run_matrix_client_loop(state: Arc<ListenState>) {
+    if state.matrix_room_id.is_empty() || state.matrix_user.is_empty() {
+        tracing::info!("matrix_client: MATRIX_ROOM_ID/MATRIX_USER not set, sync loop disabled");
+        return;
+    }
+    let own_user_id = format!("@{}:occitane.guilhem", state.matrix_user);
+
+    loop {
+        let token = match matrix_login(&state.matrix_homeserver, &state.matrix_user, &state.matrix_password).await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::error!("matrix_client: login failed, retrying in 30s: {}", e);
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                continue;
+            }
+        };
+        *state.matrix_access_token.write().await = token.clone();
+        tracing::info!("matrix_client: logged in as {}", own_user_id);
+
+        // Initial sync: capture a since token without processing backlog.
+        let mut since = match matrix_sync(&state.matrix_homeserver, &token, None, &state.matrix_room_id).await {
+            Ok((s, _)) => s,
+            Err(e) => {
+                tracing::error!("matrix_client: initial sync failed, retrying in 30s: {}", e);
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                continue;
+            }
+        };
+
+        'sync_loop: loop {
+            let current_token = state.matrix_access_token.read().await.clone();
+            match matrix_sync(&state.matrix_homeserver, &current_token, Some(&since), &state.matrix_room_id).await {
+                Ok((next_since, events)) => {
+                    since = next_since;
+                    for (sender, content) in events {
+                        if sender == own_user_id {
+                            continue; // echo guard
+                        }
+                        let req = MatrixReplyReq {
+                            room_id: state.matrix_room_id.clone(),
+                            sender: sender.clone(),
+                            content,
+                            history: vec![],
+                            event_id: None,
+                        };
+                        match run_matrix_reply(&state, &req).await {
+                            Ok(reply) => {
+                                let post_token = state.matrix_access_token.read().await.clone();
+                                if let Err(e) = matrix_post(&state.matrix_homeserver, &post_token, &state.matrix_room_id, &reply).await {
+                                    tracing::error!("matrix_client: post failed: {}", e);
+                                }
+                            }
+                            Err(e) => tracing::error!("matrix_client: run_matrix_reply failed: {}", e),
+                        }
+                    }
+                }
+                Err(e) if e.to_string().contains("M_UNKNOWN_TOKEN") => {
+                    tracing::warn!("matrix_client: access token invalid, re-logging in");
+                    break 'sync_loop; // fall through to outer loop's fresh login
+                }
+                Err(e) => {
+                    tracing::warn!("matrix_client: sync error (retrying in 5s): {}", e);
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                }
+            }
+        }
+    }
 }
 
 async fn run_sre_alert(state: &ListenState) -> anyhow::Result<()> {
@@ -1965,7 +2161,19 @@ async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::
             // The sidecar process is long-lived (one per room, reused across
             // messages) — always attach the full tool/MCP set so capability
             // doesn't get frozen at whatever the room's first message needed.
-            let (system_prompt, skills, def_models) = resolve_guilhem_prompt(&state.fondament_path, &state.generation, &req.room_id);
+            let (mut system_prompt, skills, def_models) = resolve_guilhem_prompt(&state.fondament_path, &state.generation, &req.room_id);
+
+            // Bridge context across session respawns (idle-reap, pod restart) via
+            // the persistent SessionGraph — only needed at spawn time, since a
+            // live `resume`d session already carries its own turn history.
+            let api_key = std::env::var("ANTHROPIC_API_KEY").ok();
+            if let Some(collapsed) = caissa_core::graph_context::build_graph_context(
+                &state.farga_url, &req.room_id, &req.sender, &req.content, api_key,
+            ).await {
+                system_prompt.push_str("\n\n--- prior context (collapsed) ---\n");
+                system_prompt.push_str(&collapsed);
+                system_prompt.push_str("\n--- end prior context ---");
+            }
             let model = def_models.get("matrix").cloned().unwrap_or_else(|| state.matrix_model.clone());
             let init = SidecarInit {
                 system_prompt,
