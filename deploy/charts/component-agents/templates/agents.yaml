@@ -73,6 +73,10 @@ spec:
               export GITLAB_TOKEN='$GL'
               export GITLAB_PAT_TOKEN='$GL'
               EOF
+              bao kv get -field=value secret/occitan/matrix/{{ .name }}-password > /tmp/matrix-password 2>/dev/null || echo -n "" > /tmp/matrix-password
+              cat >> /creds/tokens.env <<EOF
+              export MATRIX_PASSWORD='$(cat /tmp/matrix-password)'
+              EOF
               echo "tokens written"
           env:
             - name: BAO_TOKEN
@@ -107,6 +111,12 @@ spec:
                 secretKeyRef:
                   name: anthropic
                   key: api-key
+            - name: MATRIX_USER
+              value: {{ .name | quote }}
+            - name: MATRIX_ROOM_ID
+              value: {{ .roomId | quote }}
+            - name: MATRIX_HOMESERVER
+              value: "http://synapse.occitan-system.svc.cluster.local:8008"
           volumeMounts:
             - name: caissa-config
               mountPath: /workspace/caissa.toml

@@ -341,12 +341,12 @@ fn github_token_envs() -> Vec<(String, String)> {
         .collect()
 }
 
-/// Reads the agent's own Matrix password from `/creds/matrix.env`, written by
+/// Reads the agent's own Matrix password from `/creds/tokens.env`, written by
 /// the fetch-tokens init container. Returns empty string if absent (local dev,
 /// or a pod that hasn't been given Matrix credentials yet) — matrix_client_loop
 /// treats an empty matrix_room_id/matrix_password as "feature disabled here".
 fn read_matrix_password() -> String {
-    let content = match std::fs::read_to_string("/creds/matrix.env") {
+    let content = match std::fs::read_to_string("/creds/tokens.env") {
         Ok(c) => c,
         Err(_) => return String::new(),
     };

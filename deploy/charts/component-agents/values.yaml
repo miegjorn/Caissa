@@ -27,18 +27,18 @@ nervi:
 # - roomId: Matrix room ID this agent inhabits (room already exists in Synapse)
 agents:
   - name: gardian
-    roomId: "!hNBIrYgqZxPsnBntbY:occitane.guilhem"
+    roomId: "!bwuKXFvUXnVZfXcKuz:occitane.guilhem"
   - name: fondament
-    roomId: "!yYNPBBfRcPAMfpyAeB:occitane.guilhem"
+    roomId: "!KuWBSmYyvyiyTMFKqJ:occitane.guilhem"
   - name: farga
-    roomId: "!kIDEzlMzVRRXveGVpL:occitane.guilhem"
+    roomId: "!CtktMiOTNtSIkdwOxq:occitane.guilhem"
   - name: amassada
-    roomId: "!AftizZpcNgfIUgqFQt:occitane.guilhem"
+    roomId: "!vLjgiURMSlkqTXgaDG:occitane.guilhem"
   - name: cor
-    roomId: "!SRtFNNEbgkATYOLktl:occitane.guilhem"
+    roomId: "!FgfTbZMpLLVGiISZTj:occitane.guilhem"
   - name: caissa
-    roomId: "!fquiGtdiWSOUyYhYUV:occitane.guilhem"
+    roomId: "!ZqGBDioAYnOATihiEU:occitane.guilhem"
   - name: charradissa
-    roomId: "!tGdWTCTRPPXgnWrhad:occitane.guilhem"
+    roomId: "!qZGQFrjAcKjPinhQnp:occitane.guilhem"
   - name: nervi
-    roomId: "!HUzSiveWLbgEsjzIFt:occitane.guilhem"
+    roomId: "!QQeweqsLsOTZYdonXi:occitane.guilhem"
