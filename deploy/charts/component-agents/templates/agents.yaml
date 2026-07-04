@@ -192,6 +192,10 @@ spec:
   concurrencyPolicy: Forbid
   jobTemplate:
     spec:
+      # Clean up job (and its pods) 1h after finishing -- failed pods from a
+      # transient connection blip (e.g. guilhem redeploying) used to linger
+      # indefinitely with no TTL set.
+      ttlSecondsAfterFinished: 3600
       template:
         spec:
           restartPolicy: OnFailure
@@ -305,6 +309,10 @@ spec:
   failedJobsHistoryLimit: 2
   jobTemplate:
     spec:
+      # Clean up job (and its pods) 1h after finishing -- failed pods from a
+      # transient connection blip (e.g. guilhem redeploying) used to linger
+      # indefinitely with no TTL set.
+      ttlSecondsAfterFinished: 3600
       activeDeadlineSeconds: 1800
       template:
         spec:
@@ -351,6 +359,10 @@ spec:
   failedJobsHistoryLimit: 2
   jobTemplate:
     spec:
+      # Clean up job (and its pods) 1h after finishing -- failed pods from a
+      # transient connection blip (e.g. guilhem redeploying) used to linger
+      # indefinitely with no TTL set.
+      ttlSecondsAfterFinished: 3600
       activeDeadlineSeconds: 1800
       template:
         spec:

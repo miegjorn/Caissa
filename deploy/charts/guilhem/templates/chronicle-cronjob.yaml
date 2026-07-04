@@ -16,6 +16,10 @@ spec:
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
+      # Clean up job (and its pods) 1h after finishing -- failed pods from a
+      # transient connection blip (e.g. guilhem redeploying) used to linger
+      # indefinitely with no TTL set.
+      ttlSecondsAfterFinished: 3600
       activeDeadlineSeconds: 600
       template:
         spec:
