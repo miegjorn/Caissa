@@ -2639,8 +2639,33 @@ async fn poll_nervi_subject(state: &ListenState, subject: &str, max_messages: u3
 }
 
 /// Parse the MCP tools/call response for nervi_subscribe.
-/// MCP wraps the result in: {"result":{"content":[{"type":"text","text":"[...]"}]}}
+///
+/// nervi-mcp's actual response shape (confirmed live against a real
+/// nervi_subscribe call) is NOT a bare array — it's an object with a
+/// `messages` field, present in two equivalent places:
+///   {"result": {
+///     "structuredContent": {"subject":.., "count":.., "messages": [...]},
+///     "content": [{"type": "text", "text": "<the same object, JSON-stringified>"}]
+///   }}
+/// Each element of `messages` is `{sequence, subject, qualifier, payload, timestamp}`,
+/// where `payload` is itself a JSON string (the original nervi_publish payload) —
+/// left as-is here; the component-agent prompt (build_component_agent_prompt)
+/// dumps the whole message batch as JSON for the LLM to interpret directly.
+///
+/// Previously this parsed `text` as if it WERE the array directly, which always
+/// failed silently (returning an empty vec, not an error) and both fallback
+/// branches also missed the real shape — every dispatch/issue message delivered
+/// this way was fetched-and-acked at the NATS layer, then silently dropped
+/// before ever reaching a component agent's application logic.
 fn parse_nervi_messages(resp: &serde_json::Value) -> Vec<serde_json::Value> {
+    if let Some(msgs) = resp
+        .get("result")
+        .and_then(|r| r.get("structuredContent"))
+        .and_then(|sc| sc.get("messages"))
+        .and_then(|m| m.as_array())
+    {
+        return msgs.clone();
+    }
     if let Some(text) = resp
         .get("result")
         .and_then(|r| r.get("content"))
@@ -2649,15 +2674,97 @@ fn parse_nervi_messages(resp: &serde_json::Value) -> Vec<serde_json::Value> {
         .and_then(|item| item.get("text"))
         .and_then(|t| t.as_str())
     {
-        if let Ok(msgs) = serde_json::from_str::<Vec<serde_json::Value>>(text) {
-            return msgs;
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text) {
+            if let Some(msgs) = parsed.get("messages").and_then(|m| m.as_array()) {
+                return msgs.clone();
+            }
+            // Back-compat: text itself is already a bare array.
+            if let Some(arr) = parsed.as_array() {
+                return arr.clone();
+            }
         }
     }
-    // Fallback: result is directly an array
-    resp.get("result")
-        .and_then(|r| r.as_array())
-        .cloned()
-        .unwrap_or_default()
+    Vec::new()
+}
+
+#[cfg(test)]
+mod nervi_message_parsing_tests {
+    use super::*;
+
+    /// Captured live against a real nervi_subscribe call through nervi-mcp —
+    /// this is the actual response shape, not an assumed one.
+    fn real_response_with_one_message() -> serde_json::Value {
+        serde_json::json!({
+            "result": {
+                "content": [{
+                    "type": "text",
+                    "text": "{\n  \"subject\": \"occitan.test.parsecheck\",\n  \"consumer_name\": \"test-parsecheck-consumer\",\n  \"count\": 1,\n  \"messages\": [\n    {\n      \"sequence\": 48,\n      \"subject\": \"occitan.test.parsecheck\",\n      \"qualifier\": \"info\",\n      \"payload\": \"{\\\"hello\\\":\\\"world\\\"}\",\n      \"timestamp\": \"2026-07-04T05:33:51Z\"\n    }\n  ]\n}"
+                }],
+                "structuredContent": {
+                    "subject": "occitan.test.parsecheck",
+                    "consumer_name": "test-parsecheck-consumer",
+                    "count": 1,
+                    "messages": [{
+                        "sequence": 48,
+                        "subject": "occitan.test.parsecheck",
+                        "qualifier": "info",
+                        "payload": "{\"hello\":\"world\"}",
+                        "timestamp": "2026-07-04T05:33:51Z"
+                    }]
+                }
+            },
+            "jsonrpc": "2.0",
+            "id": 1
+        })
+    }
+
+    #[test]
+    fn parses_structured_content_messages() {
+        let resp = real_response_with_one_message();
+        let msgs = parse_nervi_messages(&resp);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0]["sequence"], 48);
+        assert_eq!(msgs[0]["payload"], "{\"hello\":\"world\"}");
+    }
+
+    #[test]
+    fn falls_back_to_text_content_when_structured_content_absent() {
+        let mut resp = real_response_with_one_message();
+        resp.as_object_mut().unwrap().get_mut("result").unwrap()
+            .as_object_mut().unwrap().remove("structuredContent");
+        let msgs = parse_nervi_messages(&resp);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0]["sequence"], 48);
+    }
+
+    #[test]
+    fn empty_messages_array_returns_empty_vec() {
+        let resp = serde_json::json!({
+            "result": {"structuredContent": {"count": 0, "messages": []}}
+        });
+        assert!(parse_nervi_messages(&resp).is_empty());
+    }
+
+    #[test]
+    fn malformed_response_returns_empty_vec_not_panic() {
+        let resp = serde_json::json!({"unexpected": "shape"});
+        assert!(parse_nervi_messages(&resp).is_empty());
+    }
+
+    #[test]
+    fn regression_bare_array_in_text_is_no_longer_the_only_supported_shape() {
+        // The pre-fix code assumed `text` was directly a JSON array. That shape
+        // never actually occurs from nervi-mcp, but keep supporting it as a
+        // back-compat fallback rather than silently dropping it.
+        let resp = serde_json::json!({
+            "result": {
+                "content": [{"type": "text", "text": "[{\"sequence\": 1}]"}]
+            }
+        });
+        let msgs = parse_nervi_messages(&resp);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0]["sequence"], 1);
+    }
 }
 
 fn component_mcp_servers(state: &ListenState) -> serde_json::Value {
