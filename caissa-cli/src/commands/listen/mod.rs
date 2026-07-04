@@ -26,7 +26,16 @@
 /// a dead/crashed sidecar is detected and respawned automatically on the next
 /// message for that room. See `ListenState::room_sessions`.
 ///
-/// `GET /health` — liveness probe; returns `200 ok`.
+/// `GET /health` — liveness probe; returns `200 ok`. Stateless -- has no
+/// per-room awareness, so it cannot detect a hung (not crashed) sidecar. See
+/// `GET /room-status` below for that.
+///
+/// `GET /room-status` — per-room diagnostic: whether each room's sidecar
+/// process is alive, how long since its last message, and how long the
+/// current turn (if any) has been in flight. Added after a hung sidecar went
+/// undetected for hours in production (2026-07-04): the SRE watchdog only
+/// polled the blanket `/health` above, which has no way to see a room stuck
+/// mid-turn.
 ///
 /// Token usage is proportional to actual events for chronicle; Matrix sessions
 /// cost tokens for as long as a room stays active (up to the idle timeout).
@@ -176,6 +185,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         .route("/matrix/reply", post(handle_matrix_reply))
         .route("/turn", post(handle_turn))
         .route("/health", axum::routing::get(|| async { "ok" }))
+        .route("/room-status", axum::routing::get(handle_room_status))
         .with_state(state);
 
     let addr = format!("0.0.0.0:{}", port);

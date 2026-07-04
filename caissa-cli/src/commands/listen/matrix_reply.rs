@@ -1,5 +1,11 @@
 use super::*;
 
+/// Ceiling on a single sidecar turn (one Matrix message → one reply). Past
+/// this, the sidecar is treated as hung rather than legitimately slow — real
+/// turns with heavy tool use still finish in well under this. See the
+/// timeout wrapping process.send() in run_matrix_reply for why this exists.
+const SIDECAR_TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
 pub(crate) async fn handle_matrix_reply(
     State(state): State<Arc<ListenState>>,
     Json(req): Json<MatrixReplyReq>,
@@ -233,7 +239,11 @@ pub(crate) async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) 
     // lock. The outer lock is held across the spawn() await (fast — just a
     // fork), but is released BEFORE the Claude API call so different rooms
     // can run in parallel.
-    let (process_arc, is_aporia): (std::sync::Arc<tokio::sync::Mutex<SidecarProcess>>, bool) = {
+    let (process_arc, is_aporia, turn_started_at): (
+        std::sync::Arc<tokio::sync::Mutex<SidecarProcess>>,
+        bool,
+        std::sync::Arc<std::sync::Mutex<Option<std::time::Instant>>>,
+    ) = {
         let mut sessions = state.room_sessions.lock().await;
 
         // If a session exists but its sidecar has died (crash, OOM, fatal SDK
@@ -281,12 +291,17 @@ pub(crate) async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) 
                     process: std::sync::Arc::new(tokio::sync::Mutex::new(process)),
                     last_activity: std::time::Instant::now(),
                     is_aporia: session_is_aporia,
+                    turn_started_at: std::sync::Arc::new(std::sync::Mutex::new(None)),
                 },
             );
         }
 
         let session = &sessions[&req.room_id];
-        (std::sync::Arc::clone(&session.process), session.is_aporia)
+        (
+            std::sync::Arc::clone(&session.process),
+            session.is_aporia,
+            std::sync::Arc::clone(&session.turn_started_at),
+        )
         // outer map lock released here — other rooms can now run in parallel
     };
 
@@ -310,9 +325,49 @@ pub(crate) async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) 
 
     // Phase 2: Claude API call — no outer map lock held. Two messages for the
     // same room serialise on process_arc's Mutex; different rooms run freely.
+    //
+    // Wrapped in a timeout: the sidecar can *hang* (not crash) mid-turn — no
+    // open socket, no CPU spin, just permanently sleeping — a failure mode
+    // the existing is_alive() dead-session check can't see, since that only
+    // detects process *exit*. Confirmed live twice (2026-07-04): a hung
+    // sidecar holds this mutex forever, silently blocking every subsequent
+    // message to the room with no error, no log line, nothing — until a
+    // human notices and manually kills the process. SIDECAR_TURN_TIMEOUT
+    // bounds that: on timeout, force-kill the sidecar so the *next* message
+    // hits the existing dead-session respawn path instead of queuing behind
+    // a mutex that will never release.
+    // Cleared on every exit path (success, sidecar error, or timeout) via
+    // Drop, not just the happy path -- a `?` early-return on a non-timeout
+    // send() error must not leave this room permanently reporting as "stuck"
+    // to GET /room-status.
+    struct ClearTurnStartedOnDrop(std::sync::Arc<std::sync::Mutex<Option<std::time::Instant>>>);
+    impl Drop for ClearTurnStartedOnDrop {
+        fn drop(&mut self) {
+            *self.0.lock().expect("turn_started_at mutex poisoned") = None;
+        }
+    }
     let reply = {
         let mut process = process_arc.lock().await;
-        process.send(&req.room_id, &req.sender, &content).await?
+        *turn_started_at.lock().expect("turn_started_at mutex poisoned") = Some(std::time::Instant::now());
+        let _clear_on_drop = ClearTurnStartedOnDrop(std::sync::Arc::clone(&turn_started_at));
+
+        match tokio::time::timeout(
+            SIDECAR_TURN_TIMEOUT,
+            process.send(&req.room_id, &req.sender, &content),
+        ).await {
+            Ok(result) => result?,
+            Err(_elapsed) => {
+                tracing::error!(
+                    "sidecar for room {} did not respond within {:?} -- treating as hung, killing",
+                    req.room_id, SIDECAR_TURN_TIMEOUT
+                );
+                process.kill();
+                anyhow::bail!(
+                    "sidecar timed out after {:?} and was killed -- it will respawn fresh on your next message",
+                    SIDECAR_TURN_TIMEOUT
+                );
+            }
+        }
     };
 
     // Phase 3: update last_activity under the outer lock (brief).
@@ -363,12 +418,13 @@ pub(crate) async fn guilhem_allowed_tools(fondament_url: &str) -> Vec<String> {
         "mcp__dispatcher__invoke_agent".to_string(),
         "mcp__dispatcher__get_agent_result".to_string(),
         "mcp__dispatcher__list_agent_specs".to_string(),
-        "mcp__charradissa__matrix_send".to_string(),
-        "mcp__charradissa__matrix_invite".to_string(),
-        "mcp__charradissa__matrix_kick".to_string(),
+        // matrix_send/matrix_invite/matrix_kick/matrix_leave/matrix_read
+        // deliberately removed (2026-07-04), matching guilhem.yaml: all five
+        // are dead weight or actively harmful here. Real replies to #occitan
+        // go through the built-in post_reply path, never an MCP tool call;
+        // matrix_send in particular always 403s (charradissa MCP server's
+        // backing identity has no standing in #occitan).
         "mcp__charradissa__matrix_get_dm".to_string(),
-        "mcp__charradissa__matrix_leave".to_string(),
-        "mcp__charradissa__matrix_read".to_string(),
         "mcp__charradissa__matrix_request_approval".to_string(),
         "mcp__nervi__nervi_publish".to_string(),
         "mcp__nervi__nervi_subscribe".to_string(),

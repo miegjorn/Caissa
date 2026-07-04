@@ -3,6 +3,7 @@
 /// Runs a loop every WATCHDOG_INTERVAL_SECS (default 300) checking:
 ///   - /health endpoints for Gardian, Farga, Amassada, Charradissa, Guilhem, Dispatcher
 ///   - Farga recent signals (at least one means the chronicle cron has run before)
+///   - /room-status on Guilhem + all component agents (see ROOM_STATUS_STUCK_THRESHOLD_SECS)
 ///
 /// On any anomaly, writes a bug-signal to Farga (project: occitan, source: sre-watchdog)
 /// AND publishes structured alert to occitan.sre.alerts NATS subject via Nervi MCP so
@@ -13,9 +14,40 @@
 ///   FARGA_URL, NERVI_MCP_URL, GARDIAN_URL, AMASSADA_URL, CHARRADISSA_URL, GUILHEM_URL, DISPATCHER_URL
 ///   WATCHDOG_INTERVAL_SECS (default 300)
 ///   WATCHDOG_PROJECT (default: occitan)
+///
+/// `/health` on these six is a stateless "ok" with zero per-room awareness —
+/// confirmed live (2026-07-04) that a hung (not crashed) agent-sidecar.js
+/// process holding a room's mutex forever is invisible to it. `/room-status`
+/// closes that gap: each Guilhem/component-agent pod reports per-room
+/// `processing_secs` (see `commands::listen::session_management::
+/// handle_room_status`), so the watchdog can catch a stuck turn even though
+/// the in-process SIDECAR_TURN_TIMEOUT (5 minutes, in `matrix_reply.rs`)
+/// should already have self-healed it by killing and respawning the sidecar.
+/// A room still reporting `processing_secs` past that timeout plus a grace
+/// margin means the self-heal itself didn't fire — worth paging on.
 
 use caissa_core::config::load_config;
 use serde_json::json;
+
+/// Grace margin added on top of matrix_reply.rs's SIDECAR_TURN_TIMEOUT
+/// (300s). A room stuck past this means the in-process timeout+kill did
+/// not fire as expected — a worse condition than the already-handled case.
+const ROOM_STATUS_STUCK_THRESHOLD_SECS: u64 = 360;
+
+#[derive(serde::Deserialize)]
+struct RoomStatusEntry {
+    room_id: String,
+    #[allow(dead_code)]
+    alive: bool,
+    #[allow(dead_code)]
+    last_activity_secs_ago: u64,
+    processing_secs: Option<u64>,
+}
+
+#[derive(serde::Deserialize)]
+struct RoomStatusResponse {
+    rooms: Vec<RoomStatusEntry>,
+}
 
 pub async fn run() -> anyhow::Result<()> {
     let config = load_config().unwrap_or_default();
@@ -39,6 +71,25 @@ pub async fn run() -> anyhow::Result<()> {
         ("charradissa", std::env::var("CHARRADISSA_URL").unwrap_or_else(|_| "http://charradissa.occitan-system.svc.cluster.local:8448".into())),
         ("guilhem",     std::env::var("GUILHEM_URL").unwrap_or_else(|_| "http://guilhem.agents.svc.cluster.local:8080".into())),
         ("dispatcher",  std::env::var("DISPATCHER_URL").unwrap_or_else(|_| "http://dispatcher.agents.svc.cluster.local:9090".into())),
+    ];
+
+    // Guilhem plus the 8 independent component-agent pods (deploy/charts/
+    // component-agents/values.yaml: gardian, fondament, farga, amassada, cor,
+    // caissa, charradissa, nervi) — every one of these runs the same `caissa
+    // listen` binary with the same per-room RoomSession/GET /room-status
+    // surface guilhem does, one Matrix room each (per-agent-matrix-
+    // independence). Names double as the `agents` namespace service name:
+    // guilhem is just `guilhem`; component agents are `{name}-agent`.
+    let room_status_targets: Vec<(&str, String)> = vec![
+        ("guilhem", std::env::var("GUILHEM_URL").unwrap_or_else(|_| "http://guilhem.agents.svc.cluster.local:8080".into())),
+        ("gardian-agent", "http://gardian-agent.agents.svc.cluster.local:8080".into()),
+        ("fondament-agent", "http://fondament-agent.agents.svc.cluster.local:8080".into()),
+        ("farga-agent", "http://farga-agent.agents.svc.cluster.local:8080".into()),
+        ("amassada-agent", "http://amassada-agent.agents.svc.cluster.local:8080".into()),
+        ("cor-agent", "http://cor-agent.agents.svc.cluster.local:8080".into()),
+        ("caissa-agent", "http://caissa-agent.agents.svc.cluster.local:8080".into()),
+        ("charradissa-agent", "http://charradissa-agent.agents.svc.cluster.local:8080".into()),
+        ("nervi-agent", "http://nervi-agent.agents.svc.cluster.local:8080".into()),
     ];
 
     tracing::info!(
@@ -94,6 +145,45 @@ pub async fn run() -> anyhow::Result<()> {
             }
             Err(e) => {
                 anomalies.push(format!("farga /signals/recent unreachable: {}", e));
+            }
+        }
+
+        // Per-room stuck-turn check via /room-status. Unreachable pods are
+        // NOT flagged here — that's already covered by the /health loop
+        // above for guilhem, and a down component-agent pod isn't this
+        // check's job to report on. Only a room that's alive enough to
+        // answer /room-status but reports a turn stuck past the threshold
+        // counts as an anomaly for this check.
+        for (name, base_url) in &room_status_targets {
+            let url = format!("{}/room-status", base_url);
+            match client.get(&url).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    match resp.json::<RoomStatusResponse>().await {
+                        Ok(status) => {
+                            for room in status.rooms {
+                                if let Some(secs) = room.processing_secs {
+                                    if secs >= ROOM_STATUS_STUCK_THRESHOLD_SECS {
+                                        let msg = format!(
+                                            "{} room {} has been processing for {}s (>= {}s threshold) -- sidecar likely hung and did not self-heal",
+                                            name, room.room_id, secs, ROOM_STATUS_STUCK_THRESHOLD_SECS
+                                        );
+                                        tracing::warn!("{}", msg);
+                                        anomalies.push(msg);
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::debug!("{} /room-status parse failed (non-fatal): {}", name, e);
+                        }
+                    }
+                }
+                Ok(resp) => {
+                    tracing::debug!("{} /room-status returned {} (non-fatal, not flagged)", name, resp.status());
+                }
+                Err(e) => {
+                    tracing::debug!("{} /room-status unreachable (non-fatal, not flagged): {}", name, e);
+                }
             }
         }
 

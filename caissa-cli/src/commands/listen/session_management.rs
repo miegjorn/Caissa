@@ -99,6 +99,13 @@ pub(crate) struct RoomSession {
     /// definition, resolved once at spawn), reused on every turn to decide
     /// whether to build a composed-parts preamble in build_turn_context_block.
     pub(crate) is_aporia: bool,
+    /// Set to the current time right before a turn calls process.send(), and
+    /// cleared back to None right after (success or error). Deliberately a
+    /// *separate* std::sync::Mutex from `process`'s own tokio Mutex: the
+    /// whole point of exposing this (via GET /room-status) is to detect a
+    /// turn that's hanging *inside* process.send() — reading it must never
+    /// contend with the same lock a stuck turn is holding.
+    pub(crate) turn_started_at: std::sync::Arc<std::sync::Mutex<Option<std::time::Instant>>>,
 }
 
 impl RoomSession {
@@ -126,12 +133,61 @@ impl RoomSession {
             )),
             last_activity,
             is_aporia: false,
+            turn_started_at: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
     pub(crate) fn is_idle(&self, timeout: std::time::Duration) -> bool {
         self.last_activity.elapsed() >= timeout
     }
+}
+
+/// Per-room status for `GET /room-status`. `processing_secs` is the whole
+/// point: it's read from `turn_started_at`'s *separate* std::sync::Mutex, so
+/// it stays readable even while a turn holds `process`'s tokio Mutex for the
+/// full SIDECAR_TURN_TIMEOUT window -- that's the one existing `/health`
+/// could never see (it's a stateless "ok", no per-room awareness at all).
+#[derive(serde::Serialize)]
+pub(crate) struct RoomStatusEntry {
+    room_id: String,
+    alive: bool,
+    last_activity_secs_ago: u64,
+    processing_secs: Option<u64>,
+}
+
+#[derive(serde::Serialize)]
+pub(crate) struct RoomStatusResponse {
+    rooms: Vec<RoomStatusEntry>,
+}
+
+pub(crate) async fn handle_room_status(
+    State(state): State<Arc<ListenState>>,
+) -> Json<RoomStatusResponse> {
+    let sessions = state.room_sessions.lock().await;
+    let mut rooms = Vec::with_capacity(sessions.len());
+    for (room_id, session) in sessions.iter() {
+        // try_lock failing means a turn is actively in flight right now (the
+        // mutex is held) -- that IS alive, not dead; only a clean try_wait()
+        // exit counts as dead. Mirrors the same non-blocking check the
+        // dead-session respawn path in run_matrix_reply uses.
+        let alive = session
+            .process
+            .try_lock()
+            .map(|mut p| p.is_alive())
+            .unwrap_or(true);
+        let processing_secs = session
+            .turn_started_at
+            .lock()
+            .expect("turn_started_at mutex poisoned")
+            .map(|started| started.elapsed().as_secs());
+        rooms.push(RoomStatusEntry {
+            room_id: room_id.clone(),
+            alive,
+            last_activity_secs_ago: session.last_activity.elapsed().as_secs(),
+            processing_secs,
+        });
+    }
+    Json(RoomStatusResponse { rooms })
 }
 
 pub(crate) async fn spawn_idle_reaper(room_sessions: Arc<tokio::sync::Mutex<HashMap<String, RoomSession>>>) {

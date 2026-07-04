@@ -415,7 +415,20 @@ pub(crate) async fn run_matrix_client_loop(state: Arc<ListenState>) {
                                     tracing::error!("matrix_client: post failed: {}", e);
                                 }
                             }
-                            Err(e) => tracing::error!("matrix_client: run_matrix_reply failed: {}", e),
+                            Err(e) => {
+                                // Previously logged only -- a failure here (including the
+                                // sidecar-timeout case) was completely invisible in Matrix:
+                                // the room just went silent with no signal anything went
+                                // wrong. Post a short, honest error message instead so a
+                                // human watching the room sees *something* rather than
+                                // nothing, matching the visibility gap found live 2026-07-04.
+                                tracing::error!("matrix_client: run_matrix_reply failed: {}", e);
+                                let post_token = state.matrix_access_token.read().await.clone();
+                                let error_reply = format!("(guilhem hit an error and could not reply: {e})");
+                                if let Err(post_err) = post_reply(&state.matrix_homeserver, &post_token, &state.matrix_room_id, &state.kroki_url, &error_reply).await {
+                                    tracing::error!("matrix_client: failed to post error notice: {}", post_err);
+                                }
+                            }
                         }
                     }
                 }
