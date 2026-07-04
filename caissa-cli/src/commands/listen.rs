@@ -179,6 +179,11 @@ struct SidecarInit {
 struct RoomSession {
     process: std::sync::Arc<tokio::sync::Mutex<SidecarProcess>>,
     last_activity: std::time::Instant,
+    /// Whether this room's agent runs under the aporia discipline — fixed
+    /// for the life of the session (a property of the agent's Fondament
+    /// definition, resolved once at spawn), reused on every turn to decide
+    /// whether to build a composed-parts preamble in build_turn_context_block.
+    is_aporia: bool,
 }
 
 impl RoomSession {
@@ -205,6 +210,7 @@ impl RoomSession {
                 SidecarProcess { child, stdin, stdout: tokio::io::BufReader::new(stdout) },
             )),
             last_activity,
+            is_aporia: false,
         }
     }
 
@@ -1211,10 +1217,15 @@ Today's date is available via `date` in Bash.
 
 /// POST /trigger/dream — CronJob-triggered daily (03:00 UTC).
 ///
-/// Three-phase session:
+/// Four-phase session (see build_dream_prompt for the full text):
 /// 1. GATHER — read Farga signals (past 24h) + GitHub state across all repos
 /// 2. SYNTHESIZE — identify drift, improvement opportunities, patterns
 /// 3. ACT — create GitHub issues for actionable gaps; write dream report to Farga
+/// 4. ADVERSARIAL CHALLENGE — read system-defence.md live from fondament-server,
+///    web-search prior art for architecturally non-obvious findings, classify
+///    against Class 1-4, write dream-adversarial signals that run_dispatch
+///    (1h later) picks up and routes autonomously (Class 1/2) or defers to
+///    Pierre-Luc (Class 3/4)
 async fn handle_dream(
     State(state): State<Arc<ListenState>>,
     Json(req): Json<TriggerReq>,
@@ -2318,16 +2329,30 @@ async fn handle_matrix_reply(
 /// Assemble the system prompt and skills for a Matrix reply session using the
 /// Fondament resolver path for `fondament/guilhem+deconstructive`.
 ///
-/// Returns `(system_prompt, skills)`. Skills come from the role definition's
-/// `skills:` list; they are empty if the definition is missing or declares none.
-/// The supply-chain decision for vendoring skills into the image was tracked in
-/// Caissa#13 (now closed). Decision: defer — the skills list is wired here so
-/// that the bake-in doesn't require a code change (only an image change), but
-/// skills are not currently baked into the image. See install.md for details.
+/// Returns `(system_prompt, skills, models, is_aporia, thinking_budget)`.
+/// Skills come from the role definition's `skills:` list; they are empty if
+/// the definition is missing or declares none. The supply-chain decision for
+/// vendoring skills into the image was tracked in Caissa#13 (now closed).
+/// Decision: defer — the skills list is wired here so that the bake-in
+/// doesn't require a code change (only an image change), but skills are not
+/// currently baked into the image. See install.md for details.
 ///
 /// Falls back to a bare prompt if fondament-server is unreachable or the
 /// definition doesn't exist there.
-async fn resolve_guilhem_prompt(fondament_url: &str, generation: &str, room_id: &str) -> (String, Vec<String>, std::collections::HashMap<String, String>, Option<u32>) {
+///
+/// Does NOT bake a composed-parts aporia preamble into the (spawn-time-only,
+/// static) system prompt — this used to call
+/// `build_aporia_preamble(&[])` unconditionally, which for every one of
+/// these 9 single-role agents produces the same generic "[role: this
+/// agent] — reason from your full context" fallback, indistinguishable in
+/// substance from the pre-aporia hardcoded preamble it replaced. The actual
+/// composed parts (this room's current Frontier nodes) aren't known until
+/// `build_graph_context` runs, and — because the sidecar process is
+/// long-lived and resumed, not respawned per turn — that has to happen on
+/// every turn, not once at spawn. See `build_turn_context_block`, called
+/// from `run_matrix_reply` on every message with the parts that actually
+/// exist at that turn.
+async fn resolve_guilhem_prompt(fondament_url: &str, generation: &str, room_id: &str) -> (String, Vec<String>, std::collections::HashMap<String, String>, bool, Option<u32>) {
     let (role_context, skills, models, modifiers) = match fetch_fondament_def(fondament_url, generation).await {
         Ok(def) => {
             let skills = def.skill_ids();
@@ -2342,36 +2367,31 @@ async fn resolve_guilhem_prompt(fondament_url: &str, generation: &str, room_id: 
 
     // Aporia is the default reasoning discipline for these 9 agents (Occitan
     // per-agent-matrix-independence follow-up) — each of their Fondament
-    // definitions now declares `modifiers: [aporia]`. Reuses
-    // fondament_core::resolver::build_aporia_preamble directly rather than
-    // re-deriving the same text locally: this used to be a hand-rolled
-    // "deconstructive discipline" preamble hardcoded to "[role: guilhem]"
-    // even for the other 8 agents — reusing the real function fixes that and
-    // keeps this in lockstep with Fondament's own `+aporia` composition path.
-    // `&[]` (no named composed parts) matches a plain `role+aporia` address
-    // with no domain/facet, the correct shape for these single-role agents;
-    // build_aporia_preamble's own empty-parts fallback text ("[role: this
-    // agent] — reason from your full context") is generic, not guilhem-specific.
+    // definitions now declares `modifiers: [aporia]`.
     let is_aporia = modifiers.iter().any(|m| m == "aporia");
-    let (deconstructive_preamble, thinking_budget): (String, Option<u32>) = if is_aporia {
-        let reasoning = fondament_core::types::StructuredReasoning::from_parts_count(0);
-        (fondament_core::resolver::build_aporia_preamble(&[]), Some(reasoning.anthropic_budget()))
-    } else {
-        (String::from("\
---- injected by deconstructive discipline ---\n\
-You are composed of the following parts:\n\
-  - [role: this agent]\n\
-\n\
-Before producing any response:\n\
-1. Become each part sequentially. Reason from its corpus alone.\n\
+    let thinking_budget = is_aporia.then(|| {
+        fondament_core::types::StructuredReasoning::from_parts_count(0).anthropic_budget()
+    });
+
+    let discipline_preamble = if is_aporia {
+        "\
+--- aporia reasoning discipline ---\n\
+Every message you receive is prefixed with a snapshot of this room's current\n\
+context graph: a list of session-node \"parts\" (this room's live frontier —\n\
+open threads, unresolved tensions), each with an activation weight. Before\n\
+responding:\n\
+1. Become each listed part sequentially. Reason from it alone.\n\
 2. Name the tensions between parts explicitly.\n\
 3. If a gap surfaces that no part of you owns, output it typed:\n\
    GAP { domain: \"...\", question: \"...\", blocking: true/false }\n\
 4. Recompose. Collapse to your public response from that synthesis.\n\
-\n\
-Your public response reflects the recomposed whole.\n\
-The internal debate is yours alone — it does not appear in output.\n\
---- end injection ---"), None)
+If no parts are listed (a fresh room, or a graph with no frontier yet),\n\
+reason from your full context as one whole instead.\n\
+Your public response reflects the recomposed whole. The internal debate is\n\
+yours alone — it does not appear in output.\n\
+--- end discipline ---"
+    } else {
+        ""
     };
 
     let context_graph_preamble = "\
@@ -2395,12 +2415,93 @@ The dispatcher will reject any other combination — this is a hard guard, not a
 
     let prompt = format!(
         "{}\n\n{}\n\n{}\n\nYou are replying in Matrix room {}.",
-        deconstructive_preamble,
+        discipline_preamble,
         role_context.trim_end(),
         context_graph_preamble,
         room_id,
     );
-    (prompt, skills, models, thinking_budget)
+    (prompt, skills, models, is_aporia, thinking_budget)
+}
+
+/// Build the per-turn text block prepended to every message sent to a room's
+/// sidecar — fresh on every turn, not only at session spawn. Combines the
+/// current aporia composed-parts framing (if `is_aporia`) with the collapsed
+/// graph context, both derived from `graph`'s Frontier nodes for *this* turn.
+/// Returns an empty string when there is nothing to inject (no aporia and no
+/// graph context) — callers should skip prepending in that case.
+fn build_turn_context_block(is_aporia: bool, graph: Option<&caissa_core::graph_context::GraphContext>) -> String {
+    let mut block = String::new();
+
+    if is_aporia {
+        let parts: Vec<fondament_core::types::ComposedPart> = graph
+            .map(|g| {
+                g.frontier_parts.iter()
+                    .map(|(summary, weight)| fondament_core::types::ComposedPart {
+                        kind: fondament_core::types::PartKind::SessionNode,
+                        name: summary.clone(),
+                        weight: *weight,
+                        corpus_ref: None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        block.push_str(&fondament_core::resolver::build_aporia_preamble(&parts));
+    }
+
+    if let Some(g) = graph {
+        if !block.is_empty() {
+            block.push_str("\n\n");
+        }
+        block.push_str("--- prior context (collapsed) ---\n");
+        block.push_str(&g.collapsed);
+        block.push_str("\n--- end prior context ---");
+    }
+
+    block
+}
+
+#[cfg(test)]
+mod turn_context_block_tests {
+    use super::*;
+    use caissa_core::graph_context::GraphContext;
+
+    #[test]
+    fn non_aporia_no_graph_produces_empty_block() {
+        assert_eq!(build_turn_context_block(false, None), "");
+    }
+
+    #[test]
+    fn non_aporia_with_graph_carries_only_collapsed_context() {
+        let g = GraphContext { collapsed: "N1: prior thread".into(), frontier_parts: vec![] };
+        let block = build_turn_context_block(false, Some(&g));
+        assert!(block.contains("prior context (collapsed)"));
+        assert!(block.contains("N1: prior thread"));
+        assert!(!block.contains("aporia"));
+    }
+
+    #[test]
+    fn aporia_with_no_graph_uses_empty_parts_fallback() {
+        let block = build_turn_context_block(true, None);
+        assert!(block.contains("aporia reasoning discipline") || block.contains("composed of the following parts"));
+        assert!(!block.contains("prior context (collapsed)"));
+    }
+
+    #[test]
+    fn aporia_with_frontier_parts_names_each_session_node() {
+        let g = GraphContext {
+            collapsed: "N1: open thread about the license flip".into(),
+            frontier_parts: vec![
+                ("open thread about the license flip".into(), 0.9),
+                ("pending review from caissa-agent".into(), 0.7),
+            ],
+        };
+        let block = build_turn_context_block(true, Some(&g));
+        assert!(block.contains("session-node"));
+        assert!(block.contains("open thread about the license flip"));
+        assert!(block.contains("pending review from caissa-agent"));
+        assert!(block.contains("0.90") || block.contains("0.9"));
+        assert!(block.contains("prior context (collapsed)"));
+    }
 }
 
 async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::Result<String> {
@@ -2408,7 +2509,7 @@ async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::
     // lock. The outer lock is held across the spawn() await (fast — just a
     // fork), but is released BEFORE the Claude API call so different rooms
     // can run in parallel.
-    let process_arc: std::sync::Arc<tokio::sync::Mutex<SidecarProcess>> = {
+    let (process_arc, is_aporia): (std::sync::Arc<tokio::sync::Mutex<SidecarProcess>>, bool) = {
         let mut sessions = state.room_sessions.lock().await;
 
         // If a session exists but its sidecar has died (crash, OOM, fatal SDK
@@ -2429,19 +2530,14 @@ async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::
             // The sidecar process is long-lived (one per room, reused across
             // messages) — always attach the full tool/MCP set so capability
             // doesn't get frozen at whatever the room's first message needed.
-            let (mut system_prompt, skills, def_models, thinking_budget) = resolve_guilhem_prompt(&state.fondament_url, &state.generation, &req.room_id).await;
+            // Graph context and the aporia composed-parts preamble are NOT
+            // baked in here — they're rebuilt fresh on every turn (see below,
+            // after this block) so a long-running room keeps getting a
+            // current snapshot instead of relying solely on the sidecar's own
+            // accumulating (and, per Experiment 9/10, diluting) history.
+            let (system_prompt, skills, def_models, session_is_aporia, thinking_budget) =
+                resolve_guilhem_prompt(&state.fondament_url, &state.generation, &req.room_id).await;
 
-            // Bridge context across session respawns (idle-reap, pod restart) via
-            // the persistent SessionGraph — only needed at spawn time, since a
-            // live `resume`d session already carries its own turn history.
-            let api_key = std::env::var("ANTHROPIC_API_KEY").ok();
-            if let Some(collapsed) = caissa_core::graph_context::build_graph_context(
-                &state.farga_url, &req.room_id, &req.sender, &req.content, api_key,
-            ).await {
-                system_prompt.push_str("\n\n--- prior context (collapsed) ---\n");
-                system_prompt.push_str(&collapsed);
-                system_prompt.push_str("\n--- end prior context ---");
-            }
             let model = def_models.get("matrix").cloned().unwrap_or_else(|| state.matrix_model.clone());
             let init = SidecarInit {
                 system_prompt,
@@ -2460,19 +2556,39 @@ async fn run_matrix_reply(state: &ListenState, req: &MatrixReplyReq) -> anyhow::
                 RoomSession {
                     process: std::sync::Arc::new(tokio::sync::Mutex::new(process)),
                     last_activity: std::time::Instant::now(),
+                    is_aporia: session_is_aporia,
                 },
             );
         }
 
-        std::sync::Arc::clone(&sessions[&req.room_id].process)
+        let session = &sessions[&req.room_id];
+        (std::sync::Arc::clone(&session.process), session.is_aporia)
         // outer map lock released here — other rooms can now run in parallel
+    };
+
+    // Recompute the graph context and (if aporia) the composed-parts preamble
+    // fresh for THIS turn, every turn — including the very first one, which
+    // subsumes what used to be a spawn-only injection. Prepended to the
+    // message content itself, not the system prompt: the sidecar's `resume`
+    // mechanism means the system prompt passed at spawn is fixed for the
+    // life of the process, but each turn's own content is exactly where a
+    // fresh snapshot belongs.
+    let api_key = std::env::var("ANTHROPIC_API_KEY").ok();
+    let graph_context = caissa_core::graph_context::build_graph_context(
+        &state.farga_url, &req.room_id, &req.sender, &req.content, api_key,
+    ).await;
+    let turn_block = build_turn_context_block(is_aporia, graph_context.as_ref());
+    let content = if turn_block.is_empty() {
+        req.content.clone()
+    } else {
+        format!("{}\n\n{}", turn_block, req.content)
     };
 
     // Phase 2: Claude API call — no outer map lock held. Two messages for the
     // same room serialise on process_arc's Mutex; different rooms run freely.
     let reply = {
         let mut process = process_arc.lock().await;
-        process.send(&req.room_id, &req.sender, &req.content).await?
+        process.send(&req.room_id, &req.sender, &content).await?
     };
 
     // Phase 3: update last_activity under the outer lock (brief).

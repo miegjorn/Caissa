@@ -10,6 +10,15 @@
 //! window to replay — the persistent graph loaded from Farga already carries
 //! prior turns.
 //!
+//! Called on *every* turn of a Matrix reply, not only at session spawn (see
+//! `run_matrix_reply`): a room's `agent-sidecar.js` process is long-lived and
+//! resumed via the Claude Agent SDK's own `resume` mechanism, which means raw
+//! conversation history accumulates for the life of the room regardless of
+//! how many turns it runs (Experiment 9/10's Condition A). Recomputing and
+//! re-injecting the collapsed context into every turn's message content — not
+//! just the system prompt at spawn — is what keeps a long-running room from
+//! silently degrading into pure dilution.
+//!
 //! Non-fatal by design: any failure (extraction API error, Farga
 //! unreachable) logs a warning and returns `None`. Callers fall back to
 //! their pre-existing prompt — this must never turn a reply into a hard
@@ -17,18 +26,27 @@
 
 use amassada_core::{extract_delta, NodeId, NodeType, SessionGraph};
 
-/// Build a collapsed context string for `room_id`'s persistent graph, given
-/// the latest message's sender and content. Returns `None` on any failure,
-/// or when the room's graph has no frontier nodes yet (first message ever
-/// in this room) — callers should fall back to their bare prompt in both
-/// cases.
+/// Result of a graph-context collapse: the flattened text for direct
+/// injection into a prompt, plus the raw Frontier node data (summary,
+/// activation_weight) for callers that want to feed it into
+/// `fondament_core::resolver::build_aporia_preamble` as composed parts
+/// instead of (or alongside) the flattened text.
+pub struct GraphContext {
+    pub collapsed: String,
+    pub frontier_parts: Vec<(String, f32)>,
+}
+
+/// Build a collapsed context for `room_id`'s persistent graph, given the
+/// latest message's sender and content. Returns `None` on any failure, or
+/// when the room's graph has no frontier nodes yet (first message ever in
+/// this room) — callers should fall back to their bare prompt in both cases.
 pub async fn build_graph_context(
     farga_url: &str,
     room_id: &str,
     latest_sender: &str,
     latest_content: &str,
     api_key: Option<String>,
-) -> Option<String> {
+) -> Option<GraphContext> {
     let mut graph = amassada_core::farga::load_graph(farga_url, room_id)
         .await
         .unwrap_or_else(|| SessionGraph::new(room_id));
@@ -47,26 +65,33 @@ pub async fn build_graph_context(
         }
     }
 
-    let frontier_ids: Vec<NodeId> = graph
+    let frontier_nodes: Vec<_> = graph
         .layers
         .causal
         .nodes
         .values()
         .filter(|n| n.node_type == NodeType::Frontier)
-        .map(|n| n.id.clone())
         .collect();
 
-    let collapsed = if frontier_ids.is_empty() {
+    let result = if frontier_nodes.is_empty() {
         None
     } else {
-        Some(graph.retrieve(&frontier_ids, 1))
+        let frontier_ids: Vec<NodeId> = frontier_nodes.iter().map(|n| n.id.clone()).collect();
+        let frontier_parts: Vec<(String, f32)> = frontier_nodes
+            .iter()
+            .map(|n| (n.summary.clone(), n.activation_weight))
+            .collect();
+        Some(GraphContext {
+            collapsed: graph.retrieve(&frontier_ids, 1),
+            frontier_parts,
+        })
     };
 
     // Save even if extraction failed above -- version/vias/other layers may
     // still be worth persisting, and save_graph is itself non-fatal on error.
     amassada_core::farga::save_graph(farga_url, room_id, &graph).await;
 
-    collapsed
+    result
 }
 
 #[cfg(test)]
