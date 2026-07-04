@@ -27,23 +27,17 @@ fondament:
 nervi:
   mcpUrl: "http://nervi.occitan-system.svc.cluster.local:8080/mcp"
 
+nats:
+  url: "nats://nats.occitan-system.svc.cluster.local:4222"
+
 # One entry per Occitan component.
-# - name:   component identifier, becomes the Farga project and pod name
-# - roomId: Matrix room ID this agent inhabits (room already exists in Synapse)
+# - name: component identifier, becomes the Farga project and pod name
 agents:
   - name: gardian
-    roomId: "!bwuKXFvUXnVZfXcKuz:occitane.guilhem"
   - name: fondament
-    roomId: "!KuWBSmYyvyiyTMFKqJ:occitane.guilhem"
   - name: farga
-    roomId: "!CtktMiOTNtSIkdwOxq:occitane.guilhem"
   - name: amassada
-    roomId: "!vLjgiURMSlkqTXgaDG:occitane.guilhem"
   - name: cor
-    roomId: "!FgfTbZMpLLVGiISZTj:occitane.guilhem"
   - name: caissa
-    roomId: "!ZqGBDioAYnOATihiEU:occitane.guilhem"
   - name: charradissa
-    roomId: "!qZGQFrjAcKjPinhQnp:occitane.guilhem"
   - name: nervi
-    roomId: "!QQeweqsLsOTZYdonXi:occitane.guilhem"

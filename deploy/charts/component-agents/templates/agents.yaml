@@ -129,12 +129,8 @@ spec:
                 secretKeyRef:
                   name: anthropic
                   key: api-key
-            - name: MATRIX_USER
-              value: {{ .name | quote }}
-            - name: MATRIX_ROOM_ID
-              value: {{ .roomId | quote }}
-            - name: MATRIX_HOMESERVER
-              value: "http://synapse.occitan-system.svc.cluster.local:8008"
+            - name: NATS_URL
+              value: {{ $.Values.nats.url | quote }}
             - name: KROKI_URL
               value: "http://kroki.occitan-system.svc.cluster.local:8000"
           volumeMounts:

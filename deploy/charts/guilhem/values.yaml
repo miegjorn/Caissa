@@ -46,13 +46,8 @@ dream:
   matrixRoomId: ""
   # Model for dream synthesis. Sonnet is appropriate — dream requires genuine reasoning.
   model: "claude-sonnet-4-6"
-matrix:
-  user: guilhem
-  # #occitan — the project room, mapped to the Occitan GitHub repo where
-  # cross-component Initiatives live. Replaces the separate #guilhem room
-  # drift had produced (that room is now orphaned, left as-is).
-  roomId: "!iNQRqUAMckCUQrSFHk:occitane.guilhem"
-  homeserver: "http://synapse.occitan-system.svc.cluster.local:8008"
+nats:
+  url: "nats://nats.occitan-system.svc.cluster.local:4222"
 dispatch:
   # Post-dream dispatch — fires 1h after dream so Farga signals are ready.
   # Guilhem reads dream report + adversarial challenges and routes to component agents.

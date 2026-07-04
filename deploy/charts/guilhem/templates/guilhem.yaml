@@ -326,12 +326,8 @@ spec:
               value: {{ .Values.backlog.matrixRoomId | quote }}
             - name: DREAM_MATRIX_ROOM_ID
               value: {{ .Values.dream.matrixRoomId | quote }}
-            - name: MATRIX_USER
-              value: {{ .Values.matrix.user | quote }}
-            - name: MATRIX_ROOM_ID
-              value: {{ .Values.matrix.roomId | quote }}
-            - name: MATRIX_HOMESERVER
-              value: {{ .Values.matrix.homeserver | quote }}
+            - name: NATS_URL
+              value: {{ .Values.nats.url | quote }}
             - name: KROKI_URL
               value: "http://kroki.occitan-system.svc.cluster.local:8000"
           volumeMounts:
