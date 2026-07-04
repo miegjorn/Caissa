@@ -65,6 +65,13 @@ amassada:
     # Fires Sunday 02:00 UTC (after nightly dream+dispatch, before the week starts).
     # Set to "" to disable.
     schedule: "0 2 * * 0"
+# ─── Corrièr ──────────────────────────────────────────────────────────────────
+# Matrix Application Service registration -- as_token/hs_token live in the
+# 'corrier-as-tokens' k8s secret (agents namespace), read directly by the
+# init container below rather than templated through Helm values.
+corrier:
+  appservice:
+    enabled: true
 # ─── Charradissa ─────────────────────────────────────────────────────────────
 charradissa:
   image: ghcr.io/miegjorn/charradissa
