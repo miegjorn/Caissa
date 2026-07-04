@@ -344,19 +344,34 @@ spec:
             - name: tools
               mountPath: /tools
               readOnly: true
+          # startupProbe gates when liveness/readiness delays even start counting
+          # (Kubernetes: "if a startup probe is defined, liveness and readiness
+          # probe delays do not begin until the startup probe has succeeded").
+          # Startup now includes a live fondament-server HTTP fetch for CLAUDE.md
+          # (Caissa#54/3afa9b3) with variable latency — without this, a slow
+          # fetch trips the livenessProbe, which restarts the pod, which retries
+          # the same slow fetch: a self-reinforcing restart loop (Caissa#57,
+          # caught live by dream's adversarial-challenge phase 2026-07-04).
+          # failureThreshold 18 * periodSeconds 10 = 180s worst-case startup budget.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            failureThreshold: 18
+            periodSeconds: 10
           readinessProbe:
             httpGet:
               path: /health
               port: 8080
-            initialDelaySeconds: 3
             periodSeconds: 10
           # livenessProbe restarts the container if the listener hangs or crashes
           # and doesn't exit cleanly (e.g. deadlock). Complements the readinessProbe.
+          # initialDelaySeconds is redundant now that startupProbe has already
+          # gated until /health first succeeds once.
           livenessProbe:
             httpGet:
               path: /health
               port: 8080
-            initialDelaySeconds: 10
             periodSeconds: 30
             failureThreshold: 3
           resources:
