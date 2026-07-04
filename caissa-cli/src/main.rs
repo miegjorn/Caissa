@@ -107,15 +107,6 @@ enum Commands {
         #[command(subcommand)]
         action: FondamentAction,
     },
-    /// Idempotent bootstrap for the 9 independent Matrix agent identities.
-    /// Registers users, force-joins them into their rooms, kicks
-    /// @charradissa-relay from component rooms. Safe to rerun.
-    BootstrapMatrixAgents {
-        #[arg(long, default_value = "http://synapse.occitan-system.svc.cluster.local:8008")]
-        homeserver: String,
-        #[arg(long, default_value = "http://openbao.occitan-system.svc.cluster.local:8200")]
-        bao_addr: String,
-    },
 }
 
 #[derive(Subcommand)]
@@ -195,8 +186,5 @@ async fn main() -> anyhow::Result<()> {
                 .await
             }
         },
-        Commands::BootstrapMatrixAgents { homeserver, bao_addr } => {
-            commands::bootstrap_matrix::run(&homeserver, &bao_addr).await
-        }
     }
 }
