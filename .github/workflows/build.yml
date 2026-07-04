@@ -33,8 +33,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # caissa-core → amassada-core → fondament-core (transitive path deps).
-      # Check out both upstream repos as named build contexts.
+      # caissa-core → amassada-core → fondament-core (transitive path deps),
+      # plus corrier-core and nervi-core (Corrièr Matrix-gateway cutover).
+      # Check out all four upstream repos as named build contexts.
       - uses: actions/checkout@v4
         with:
           repository: miegjorn/Amassada
@@ -44,6 +45,16 @@ jobs:
         with:
           repository: miegjorn/Fondament
           path: fondament-src
+          token: ${{ secrets.MIEGJORN_CI_TOKEN }}
+      - uses: actions/checkout@v4
+        with:
+          repository: miegjorn/Corrier
+          path: corrier-src
+          token: ${{ secrets.MIEGJORN_CI_TOKEN }}
+      - uses: actions/checkout@v4
+        with:
+          repository: miegjorn/nervi
+          path: nervi-src
           token: ${{ secrets.MIEGJORN_CI_TOKEN }}
 
       - uses: docker/setup-buildx-action@v3
@@ -67,6 +78,8 @@ jobs:
           build-contexts: |
             amassada=./amassada-src
             fondament=./fondament-src
+            corrier=./corrier-src
+            nervi=./nervi-src
           cache-from: type=gha,scope=${{ github.workflow }}
           cache-to: type=gha,mode=max,scope=${{ github.workflow }}
 
@@ -78,13 +91,15 @@ jobs:
       contents: write
       packages: write
     # caissa-core → amassada-core → fondament-core (transitive Cargo path
-    # deps, not just the --fondament-path CLI flag below) need Fondament and
-    # Amassada as true sibling directories of this checkout, not subdirectories
-    # of it — actions/checkout@v4 refuses a path outside $GITHUB_WORKSPACE
-    # (path: ../X errors with "is not under ..."), so instead this checks out
-    # all three repos as explicit siblings under $GITHUB_WORKSPACE (GitHub's
-    # own documented "checkout multiple repos side by side" pattern) and runs
-    # every step from inside the Caissa checkout via this default.
+    # deps, not just the --fondament-path CLI flag below), plus corrier-core
+    # and nervi-core (Corrièr Matrix-gateway cutover) need Fondament,
+    # Amassada, Corrier, and nervi as true sibling directories of this
+    # checkout, not subdirectories of it — actions/checkout@v4 refuses a path
+    # outside $GITHUB_WORKSPACE (path: ../X errors with "is not under ..."),
+    # so instead this checks out all five repos as explicit siblings under
+    # $GITHUB_WORKSPACE (GitHub's own documented "checkout multiple repos
+    # side by side" pattern) and runs every step from inside the Caissa
+    # checkout via this default.
     defaults:
       run:
         working-directory: Caissa
@@ -107,6 +122,20 @@ jobs:
           token: ${{ secrets.MIEGJORN_CI_TOKEN }}
           ref: main
           path: Amassada
+
+      - uses: actions/checkout@v4
+        with:
+          repository: miegjorn/Corrier
+          token: ${{ secrets.MIEGJORN_CI_TOKEN }}
+          ref: main
+          path: Corrier
+
+      - uses: actions/checkout@v4
+        with:
+          repository: miegjorn/nervi
+          token: ${{ secrets.MIEGJORN_CI_TOKEN }}
+          ref: main
+          path: nervi
 
       # Default rustflags for this action is `-D warnings`, which now also
       # applies to amassada-core (a transitive dependency as of the Matrix
