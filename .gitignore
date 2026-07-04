@@ -2,3 +2,4 @@
 Cargo.lock
 .env
 caissa.toml
+.claude/worktrees/
