@@ -29,7 +29,7 @@ use std::collections::HashMap;
 
 /// Map a GitHub repo name to its Occitan component name.
 /// Falls back to the lowercase repo name for unknown repos.
-fn repo_to_component(repo_name: &str) -> String {
+pub(crate) fn repo_to_component(repo_name: &str) -> String {
     match repo_name.to_lowercase().as_str() {
         "caissa"      => "caissa",
         "fondament"   => "fondament",

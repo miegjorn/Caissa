@@ -379,6 +379,9 @@ spec:
         # SRE watchdog sidecar — no-LLM health probe (Caissa#25).
         # Runs caissa watch in a loop; on anomaly writes a bug-signal to Farga.
         # Independent of the main guilhem process — survives crashes of the listen loop.
+        # Also polls GitHub Actions build status and dispatches fix tasks
+        # straight to the affected component via Nervi (see watch.rs) — reuses
+        # the same github-sync secret the sidecar below already depends on.
         - name: sre-watchdog
           image: {{ .Values.caissaImage }}
           imagePullPolicy: Always
@@ -394,6 +397,12 @@ spec:
               value: "http://guilhem.agents.svc.cluster.local:8080"
             - name: DISPATCHER_URL
               value: "http://dispatcher.agents.svc.cluster.local:9090"
+            - name: GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: github-sync
+                  key: token
+                  optional: true
           volumeMounts:
             - name: caissa-config
               mountPath: /workspace/caissa.toml
