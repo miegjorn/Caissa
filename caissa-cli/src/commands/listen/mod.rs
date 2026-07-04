@@ -138,7 +138,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         dream_model: config.dream_model,
         dream_matrix_room_id: std::env::var("DREAM_MATRIX_ROOM_ID").unwrap_or_default(),
         nats_url: std::env::var("NATS_URL")
-            .unwrap_or_else(|_| "nats://nats.occitan-system.svc.cluster.local:4222".into()),
+            .unwrap_or_else(|_| "nats://nervi-nats.occitan-system.svc.cluster.local:4222".into()),
     });
 
     tokio::spawn(run_nervi_loop_if_component(Arc::clone(&state)));

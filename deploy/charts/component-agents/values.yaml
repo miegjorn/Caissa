@@ -28,7 +28,7 @@ nervi:
   mcpUrl: "http://nervi.occitan-system.svc.cluster.local:8080/mcp"
 
 nats:
-  url: "nats://nats.occitan-system.svc.cluster.local:4222"
+  url: "nats://nervi-nats.occitan-system.svc.cluster.local:4222"
 
 # One entry per Occitan component.
 # - name: component identifier, becomes the Farga project and pod name
