@@ -68,10 +68,33 @@ pub(crate) async fn run_chat_loop(state: Arc<ListenState>) {
 }
 
 async fn handle_chat_message(
-    state: &ListenState,
+    state: &Arc<ListenState>,
     nervi: &nervi_core::NerviClient,
     msg: ChatMessage,
 ) -> anyhow::Result<()> {
+    // K-1: intercept `@guilhem handoff ...` BEFORE the conversational flow.
+    // A handoff is a mechanical dispatch -- it must not consume conversational
+    // context or spawn a full turn. Restored here after Task 10's chat_loop.rs
+    // rewrite dropped this check (a real regression caught in review, not an
+    // intentional removal) -- same interception point as the old
+    // handle_matrix_reply, just moved into the new Nervi-driven message path.
+    if is_handoff_message(&msg.content) {
+        let req = MatrixReplyReq {
+            room_id: msg.conversation_id.clone(),
+            sender: msg.sender.clone(),
+            content: msg.content.clone(),
+            history: vec![],
+            event_id: msg.external_event_id.clone(),
+        };
+        let text = handle_handoff(state, &req).await;
+        let reply = ChatReply {
+            conversation_id: msg.conversation_id,
+            content: text,
+            adapter: msg.adapter,
+        };
+        return publish_outbound(nervi, &state.component_name, &reply).await;
+    }
+
     // Fresh context every turn, from Farga -- no resumed SDK session to lean
     // on. This is the seam the spec's Agent pods section names as the
     // natural home for trajectory-conditioned context collapse; this task
