@@ -55,8 +55,13 @@ use sha1::Sha1;
 /// (Matrix localpart, Matrix room ID) for each of the 9 independent agents.
 /// guilhem's room is `#occitan` (a Matrix Space, `!iNQRqUAMckCUQrSFHk`) — the
 /// project room, mapped to the `Occitan` GitHub repo where cross-component
-/// Initiatives live — not the separate `#guilhem` room drift had produced;
-/// that room is now orphaned (left as-is, not actively cleaned up).
+/// Initiatives live — not the separate `#guilhem` room drift had produced.
+/// That orphaned room is `ORPHANED_GUILHEM_ROOM` below — @guilhem is removed
+/// from it on every bootstrap run (2026-07-04: confirmed live that both
+/// rooms have @guilhem as a member with no client-visible way to tell them
+/// apart, and a real message sent into the orphaned room got no reply,
+/// silently, because the running pod's sync loop only ever polls the one
+/// room it's configured with — MATRIX_ROOM_ID — not this one).
 pub const AGENTS: &[(&str, &str)] = &[
     ("guilhem", "!iNQRqUAMckCUQrSFHk:occitane.guilhem"),
     ("gardian", "!bwuKXFvUXnVZfXcKuz:occitane.guilhem"),
@@ -75,6 +80,15 @@ pub const AGENTS: &[(&str, &str)] = &[
 fn component_rooms() -> impl Iterator<Item = &'static (&'static str, &'static str)> {
     AGENTS.iter().filter(|(name, _)| *name != "guilhem")
 }
+
+/// The `#guilhem` room (canonical alias, name "Guilhem", created by
+/// pierre-luc) drift produced before the per-agent-Matrix-independence
+/// migration. @guilhem never left it, so it still shows up as "a room with
+/// Guilhem in it" in any client — indistinguishable from the real, actively
+/// polled `#occitan` DM (`!iNQRqUAMckCUQrSFHk`, in AGENTS above) without
+/// inside knowledge of MATRIX_ROOM_ID. Removed on every bootstrap run so
+/// there is exactly one unambiguous room per agent.
+const ORPHANED_GUILHEM_ROOM: &str = "!hTNBZpYDxyvfcuralm:occitane.guilhem";
 
 /// Compute the HMAC-SHA1 MAC for Synapse's shared-secret registration API,
 /// matching the algorithm in Synapse's `register_new_matrix_user` script:
@@ -503,7 +517,11 @@ pub async fn run(homeserver: &str, bao_addr: &str) -> anyhow::Result<()> {
     // membership there is legitimate, not a ghost.
     let old_charradissa_id = "@charradissa:occitane.guilhem";
     let cleanup_rooms: Vec<_> = component_rooms().filter(|(name, _)| *name != "charradissa").collect();
-    if !cleanup_rooms.is_empty() {
+    let guilhem_id = "@guilhem:occitane.guilhem";
+    // One throwaway admin covers both cleanups: @charradissa's stale
+    // membership in the 7 non-charradissa component rooms, and @guilhem's
+    // stale membership in the orphaned #guilhem room (see ORPHANED_GUILHEM_ROOM).
+    {
         let (admin_user_id, admin_token) = admin_register(&client, homeserver, &shared_secret).await?;
         for (name, room_id) in &cleanup_rooms {
             if let Err(e) = matrix_leave_as(&client, homeserver, &admin_token, old_charradissa_id, room_id).await {
@@ -511,6 +529,11 @@ pub async fn run(homeserver: &str, bao_addr: &str) -> anyhow::Result<()> {
             } else {
                 tracing::info!("bootstrap-matrix: removed {} from {} ({})", old_charradissa_id, name, room_id);
             }
+        }
+        if let Err(e) = matrix_leave_as(&client, homeserver, &admin_token, guilhem_id, ORPHANED_GUILHEM_ROOM).await {
+            tracing::warn!("bootstrap-matrix: remove {} from orphaned #guilhem room failed (continuing — may already be gone): {}", guilhem_id, e);
+        } else {
+            tracing::info!("bootstrap-matrix: removed {} from orphaned #guilhem room ({})", guilhem_id, ORPHANED_GUILHEM_ROOM);
         }
         // Best-effort: the throwaway admin's own deactivation failing does
         // not affect correctness of the cleanup above, just leaves an unused
