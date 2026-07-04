@@ -27,7 +27,7 @@ openbao:
 # ─── Farga ───────────────────────────────────────────────────────────────────
 farga:
   image: ghcr.io/miegjorn/farga
-  imageTag: sha-e3bfd3e # CI writes sha-<sha> here on every main push
+  imageTag: sha-40e27e7 # CI writes sha-<sha> here on every main push
   replicas: 1
   port: 7500
   storage: 5Gi
