@@ -36,6 +36,7 @@ pub(crate) async fn run_scan(state: &ListenState) -> anyhow::Result<()> {
     let prompt = build_scan_prompt(&state.farga_project);
 
     let output = tokio::process::Command::new("claude")
+        .prefer_oauth_over_api_key()
         .args([
             "--print",
             &prompt,
@@ -251,6 +252,7 @@ pub(crate) async fn run_dispatch(state: &ListenState) -> anyhow::Result<()> {
     let prompt = build_dispatch_prompt(&state.fondament_path);
 
     let output = tokio::process::Command::new("claude")
+        .prefer_oauth_over_api_key()
         .args([
             "--print",
             &prompt,
@@ -413,6 +415,7 @@ pub(crate) async fn run_mission_pulse(state: &ListenState) -> anyhow::Result<()>
     let tools = agent_allowed_tools(&state.fondament_url, state).await.join(",");
 
     let output = tokio::process::Command::new("claude")
+        .prefer_oauth_over_api_key()
         .args([
             "--print",
             &prompt,
@@ -608,6 +611,7 @@ pub(crate) async fn run_intake(state: &ListenState, description: &str) -> anyhow
     let tools = agent_allowed_tools(&state.fondament_url, state).await.join(",");
 
     let output = tokio::process::Command::new("claude")
+        .prefer_oauth_over_api_key()
         .args([
             "--print",
             &prompt,

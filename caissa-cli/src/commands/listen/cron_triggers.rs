@@ -58,6 +58,7 @@ pub(crate) async fn run_sre_alert(state: &ListenState) -> anyhow::Result<()> {
     let prompt = build_sre_alert_prompt(&state.fondament_path);
 
     let output = tokio::process::Command::new("claude")
+        .prefer_oauth_over_api_key()
         .args([
             "--print",
             &prompt,
@@ -276,6 +277,7 @@ pub(crate) async fn run_chronicle(state: &ListenState, prompt: &str) -> anyhow::
         std::fs::write(&mcp_path, &mcp_config)?;
 
         let output = tokio::process::Command::new("claude")
+            .prefer_oauth_over_api_key()
             .args([
                 "--print",
                 prompt,
@@ -362,6 +364,7 @@ pub(crate) async fn run_backlog_review(state: &ListenState) -> anyhow::Result<()
     } else {
         std::fs::write(&mcp_path, &mcp_config)?;
         let output = tokio::process::Command::new("claude")
+            .prefer_oauth_over_api_key()
             .args([
                 "--print",
                 &prompt,
@@ -532,6 +535,7 @@ pub(crate) async fn run_dream(state: &ListenState) -> anyhow::Result<()> {
     let prompt = build_dream_prompt(&state.fondament_path, &state.farga_project);
 
     let output = tokio::process::Command::new("claude")
+        .prefer_oauth_over_api_key()
         .args([
             "--print",
             &prompt,

@@ -321,6 +321,7 @@ pub(crate) async fn run_component_agent(state: &ListenState, component: &str, pa
         let tools = component_allowed_tools(&state.fondament_url, component).await.join(",");
 
         let output = tokio::process::Command::new("claude")
+            .prefer_oauth_over_api_key()
             .args([
                 "--print",
                 &prompt,

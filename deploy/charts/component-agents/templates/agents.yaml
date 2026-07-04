@@ -129,6 +129,15 @@ spec:
                 secretKeyRef:
                   name: anthropic
                   key: api-key
+            # See guilhem.yaml's identical block for why this needs
+            # ClaudeCommandExt::prefer_oauth_over_api_key (matrix_admin.rs) to
+            # actually take effect over ANTHROPIC_API_KEY above.
+            - name: CLAUDE_CODE_OAUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: anthropic
+                  key: oauth-token
+                  optional: true
             - name: NATS_URL
               value: {{ $.Values.nats.url | quote }}
             - name: KROKI_URL
@@ -410,6 +419,12 @@ spec:
                     secretKeyRef:
                       name: anthropic
                       key: api-key
+                - name: CLAUDE_CODE_OAUTH_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: anthropic
+                      key: oauth-token
+                      optional: true
               volumeMounts:
                 - name: caissa-config
                   mountPath: /workspace/caissa.toml

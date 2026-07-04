@@ -11,6 +11,7 @@
 /// Run manually or via the weekly ingestion CronJob in the component-agents chart.
 
 use caissa_core::config::load_config;
+use crate::commands::listen::ClaudeCommandExt;
 
 const COMPONENTS: &[(&str, &str)] = &[
     ("gardian",     "Gardian"),
@@ -186,6 +187,7 @@ Output only the summary, no preamble."#,
         tokio::process::Command::new("echo").arg(&text).output().await?
     } else {
         tokio::process::Command::new("claude")
+            .prefer_oauth_over_api_key()
             .args([
                 "--print",
                 &prompt,

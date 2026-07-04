@@ -295,6 +295,25 @@ spec:
                   name: anthropic
                   key: api-key
                   optional: false
+            # Claude Code actually prefers ANTHROPIC_API_KEY over
+            # CLAUDE_CODE_OAUTH_TOKEN when both are present in a process's
+            # own environment (confirmed empirically, 2026-07-04 -- the
+            # reverse of what's documented behavior for --bare mode implies).
+            # For the OAuth token (tied to a Claude subscription, cheaper/
+            # included usage vs. metered API billing) to actually take
+            # effect over the API key above, every `claude` subprocess spawn
+            # site in caissa-cli strips ANTHROPIC_API_KEY from ITS OWN child
+            # process when this var is present (ClaudeCommandExt::
+            # prefer_oauth_over_api_key in matrix_admin.rs) -- API key stays
+            # wired here as the failover for any pod where this key is
+            # absent, since that removal only affects the spawned child, not
+            # this container's own environment.
+            - name: CLAUDE_CODE_OAUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: anthropic
+                  key: oauth-token
+                  optional: true
             # Optional provider keys for OpenAI-compatible shim (xAI, OpenAI, Qwen, …)
             - name: XAI_API_KEY
               valueFrom:

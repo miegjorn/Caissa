@@ -20,6 +20,7 @@ use futures::StreamExt;
 /// what build_graph_context already reconstructs from Farga.
 pub(crate) async fn run_single_turn(system_prompt: &str, content: &str) -> anyhow::Result<String> {
     let output = tokio::process::Command::new("claude")
+        .prefer_oauth_over_api_key()
         .args(["--print", content, "--append-system-prompt", system_prompt])
         .output()
         .await?;
