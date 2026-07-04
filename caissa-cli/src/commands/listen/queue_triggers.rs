@@ -243,7 +243,7 @@ pub(crate) async fn handle_dispatch(
 
 pub(crate) async fn run_dispatch(state: &ListenState) -> anyhow::Result<()> {
     let mcp_config = serde_json::to_string(&serde_json::json!({
-        "mcpServers": guilhem_mcp_servers(state)
+        "mcpServers": agent_mcp_servers(state)
     }))?;
     let mcp_path = std::env::temp_dir().join("guilhem-dispatch-mcp.json");
     std::fs::write(&mcp_path, &mcp_config)?;
@@ -404,13 +404,13 @@ pub(crate) async fn handle_mission_pulse(
 
 pub(crate) async fn run_mission_pulse(state: &ListenState) -> anyhow::Result<()> {
     let mcp_config = serde_json::to_string(&serde_json::json!({
-        "mcpServers": guilhem_mcp_servers(state)
+        "mcpServers": agent_mcp_servers(state)
     }))?;
     let mcp_path = std::env::temp_dir().join("guilhem-mission-pulse-mcp.json");
     std::fs::write(&mcp_path, &mcp_config)?;
 
     let prompt = build_mission_pulse_prompt(&state.fondament_path);
-    let tools = guilhem_allowed_tools(&state.fondament_url).await.join(",");
+    let tools = agent_allowed_tools(&state.fondament_url, state).await.join(",");
 
     let output = tokio::process::Command::new("claude")
         .args([
@@ -599,13 +599,13 @@ pub(crate) async fn handle_intake(
 
 pub(crate) async fn run_intake(state: &ListenState, description: &str) -> anyhow::Result<()> {
     let mcp_config = serde_json::to_string(&serde_json::json!({
-        "mcpServers": guilhem_mcp_servers(state)
+        "mcpServers": agent_mcp_servers(state)
     }))?;
     let mcp_path = std::env::temp_dir().join("guilhem-intake-mcp.json");
     std::fs::write(&mcp_path, &mcp_config)?;
 
     let prompt = build_intake_prompt(&state.fondament_path, description);
-    let tools = guilhem_allowed_tools(&state.fondament_url).await.join(",");
+    let tools = agent_allowed_tools(&state.fondament_url, state).await.join(",");
 
     let output = tokio::process::Command::new("claude")
         .args([

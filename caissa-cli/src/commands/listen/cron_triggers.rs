@@ -50,7 +50,7 @@ pub(crate) async fn handle_sre_alert(
 /// site that spawns `claude` must re-read here rather than relying on inherited env.
 pub(crate) async fn run_sre_alert(state: &ListenState) -> anyhow::Result<()> {
     let mcp_config = serde_json::to_string(&serde_json::json!({
-        "mcpServers": guilhem_mcp_servers(state)
+        "mcpServers": agent_mcp_servers(state)
     }))?;
     let mcp_path = std::env::temp_dir().join("guilhem-sre-alert-mcp.json");
     std::fs::write(&mcp_path, &mcp_config)?;
@@ -520,11 +520,11 @@ pub(crate) async fn run_dream(state: &ListenState) -> anyhow::Result<()> {
     // call failed and the dream silently fell back to writing dispatch intent
     // as plain Farga signals instead — confirmed live, in a real dream
     // report ("Dispatches executed (via Farga signals — nervi_publish
-    // unavailable)"). Reuse guilhem_mcp_servers(state), the same full server
+    // unavailable)"). Reuse agent_mcp_servers(state), the same full server
     // set run_dispatch/run_mission_pulse/run_intake already use, instead of a
     // second hand-rolled farga-only config drifting out of sync with them.
     let mcp_config = serde_json::to_string(&serde_json::json!({
-        "mcpServers": guilhem_mcp_servers(state)
+        "mcpServers": agent_mcp_servers(state)
     }))?;
     let mcp_path = std::env::temp_dir().join("guilhem-dream-mcp.json");
     std::fs::write(&mcp_path, &mcp_config)?;

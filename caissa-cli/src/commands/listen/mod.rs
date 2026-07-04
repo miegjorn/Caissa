@@ -1,8 +1,4 @@
-/// Guilhem daemon — HTTP listener with six routes:
-///
-/// `POST /turn` — Amassada orchestrates Guilhem as an agent-as-endpoint participant
-/// (Option B-full). Single-shot: Amassada assembles the full context, sends one
-/// user message, and the process tears down. No per-room session is created.
+/// Agent pod daemon — HTTP listener plus a Nervi-driven chat loop.
 ///
 /// `POST /trigger/chronicle` — accepts chronicle trigger events from Argo
 /// Workflows, git webhooks, or cron. One-shot: runs `claude --print "<task>"`
@@ -16,59 +12,50 @@
 /// reads open GitHub issues across miegjorn repos, synthesizes a backlog review,
 /// writes it to Farga, and optionally posts a summary to Matrix.
 ///
-/// `POST /matrix/reply` — Charradissa (the Matrix appservice/bridge) forwards
-/// every room message here; this listener generates the actual reply.
-/// Per-room, NOT one-shot: the first message in a room spawns a persistent
-/// `agent-sidecar.js` child process (Claude Agent SDK, `sandbox/agent-sidecar.js`),
-/// and later messages in the same room are sent to that same process over
-/// stdin/stdout, giving real conversational continuity via the SDK's `resume`
-/// session mechanism. A background sweep reaps sessions idle past 30 minutes;
-/// a dead/crashed sidecar is detected and respawned automatically on the next
-/// message for that room. See `ListenState::room_sessions`.
+/// `GET /health` — liveness probe; returns `200 ok`.
 ///
-/// `GET /health` — liveness probe; returns `200 ok`. Stateless -- has no
-/// per-room awareness, so it cannot detect a hung (not crashed) sidecar. See
-/// `GET /room-status` below for that.
+/// Chat turns no longer arrive over HTTP. `chat_loop::run_chat_loop` (spawned
+/// below, alongside the HTTP server) continuously consumes this component's
+/// Nervi inbound chat subject (`corrier_core::consume_inbound`) -- every room
+/// this component is in, one subscription -- builds fresh context from Farga
+/// for each message (no SDK `resume()`, no per-room child process, no
+/// in-memory session map), and publishes the reply to Nervi's outbound side
+/// (`corrier_core::publish_outbound`). Corrièr's write gateway delivers it to
+/// Matrix; this pod never touches a Matrix credential. This replaces the
+/// former `agent-sidecar.js` child-process-per-room model and its
+/// `/matrix/reply`, `/turn`, and `/room-status` HTTP routes entirely -- see
+/// `chat_loop.rs`.
 ///
-/// `GET /room-status` — per-room diagnostic: whether each room's sidecar
-/// process is alive, how long since its last message, and how long the
-/// current turn (if any) has been in flight. Added after a hung sidecar went
-/// undetected for hours in production (2026-07-04): the SRE watchdog only
-/// polled the blanket `/health` above, which has no way to see a room stuck
-/// mid-turn.
-///
-/// Token usage is proportional to actual events for chronicle; Matrix sessions
-/// cost tokens for as long as a room stays active (up to the idle timeout).
+/// Token usage is proportional to actual events for chronicle triggers; chat
+/// turns cost tokens per message (no idle-session cost, since there is no
+/// idle session).
 
 use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 
 // External imports re-exported so submodules pick them up via `use super::*`.
 pub(crate) use std::sync::Arc;
-pub(crate) use std::collections::HashMap;
 pub(crate) use caissa_core::config::load_config;
 pub(crate) use caissa_core::agent::{fetch_fondament_def, tool_to_claude_name};
 pub(crate) use super::handoff::{is_handoff_message, parse_handoff_message, HandoffRequest};
 
 // Focused submodules split out of the former monolithic listen.rs (Caissa#55).
-mod matrix_client;
 mod cron_triggers;
 mod queue_triggers;
-mod matrix_reply;
+mod chat_loop;
+mod agent_prompt;
+mod matrix_admin;
 mod component_agent;
 mod handoff;
-mod turn_endpoint;
-mod session_management;
 
 // Re-export submodule items so siblings resolve each other through `use super::*`.
-pub(crate) use matrix_client::*;
 pub(crate) use cron_triggers::*;
 pub(crate) use queue_triggers::*;
-pub(crate) use matrix_reply::*;
+pub(crate) use chat_loop::*;
+pub(crate) use agent_prompt::*;
+pub(crate) use matrix_admin::*;
 pub(crate) use component_agent::*;
 pub(crate) use handoff::*;
-pub(crate) use turn_endpoint::*;
-pub(crate) use session_management::*;
 
 #[derive(Clone)]
 #[allow(dead_code)]
@@ -94,28 +81,19 @@ pub(crate) struct ListenState {
     dream_model: String,
     /// Matrix room ID for dream report posts. Empty = posting disabled.
     dream_matrix_room_id: String,
-    /// One persistent agent-sidecar.js child process per actively-chatting
-    /// Matrix room. Reaped by an idle-timeout sweep (see spawn_idle_reaper).
-    /// The outer Mutex protects the map (held only for map operations, never
-    /// across the Claude API call). Each entry's inner Mutex serialises
-    /// concurrent messages for the same room while allowing different rooms
-    /// to run in parallel.
-    room_sessions: Arc<tokio::sync::Mutex<HashMap<String, RoomSession>>>,
-    /// This pod's own Matrix identity. Empty room_id disables the sync loop
-    /// entirely (e.g. local dev without Matrix configured).
-    matrix_user: String,
-    matrix_room_id: String,
-    matrix_homeserver: String,
-    matrix_password: String,
-    /// Updated in place on every successful login/re-login; read by both the
-    /// sync loop and the post-reply call.
-    matrix_access_token: Arc<tokio::sync::RwLock<String>>,
-    /// Kroki server URL for rendering ```mermaid blocks in a reply as PNG
-    /// images instead of posting raw diagram source as text.
-    kroki_url: String,
+    /// This pod's own component identity — used to resolve its Fondament
+    /// persona (see agent_prompt::resolve_agent_prompt) and as the routing
+    /// key for its Nervi inbound/outbound chat subjects (see chat_loop.rs,
+    /// corrier_core::{consume_inbound, publish_outbound}). Defaults from
+    /// `config.generation` with any `-agent` suffix trimmed, matching
+    /// `repo_to_component`'s convention in `sync.rs`.
+    component_name: String,
+    /// NATS/JetStream broker URL for this pod's Nervi chat-loop connection
+    /// (see chat_loop::run_chat_loop). Corrièr's own gateways connect to the
+    /// same broker under the same env var.
+    nats_url: String,
 }
 
-/// A running agent-sidecar.js child process for one room.
 #[derive(Deserialize)]
 pub struct TriggerReq {
     /// Human-readable reason for the chronicle run.
@@ -153,25 +131,18 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         nervi_mcp_url: config.nervi_mcp_url,
         fondament_path: config.fondament_path,
         fondament_url: config.fondament_url,
+        component_name: config.generation.strip_suffix("-agent").unwrap_or(&config.generation).to_string(),
         generation: config.generation,
         sre_matrix_room_id: std::env::var("SRE_MATRIX_ROOM_ID").unwrap_or_default(),
         backlog_matrix_room_id: std::env::var("BACKLOG_MATRIX_ROOM_ID").unwrap_or_default(),
         dream_model: config.dream_model,
         dream_matrix_room_id: std::env::var("DREAM_MATRIX_ROOM_ID").unwrap_or_default(),
-        room_sessions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-        matrix_user: std::env::var("MATRIX_USER").unwrap_or_default(),
-        matrix_room_id: std::env::var("MATRIX_ROOM_ID").unwrap_or_default(),
-        matrix_homeserver: std::env::var("MATRIX_HOMESERVER")
-            .unwrap_or_else(|_| "http://synapse.occitan-system.svc.cluster.local:8008".into()),
-        matrix_password: read_matrix_password(),
-        matrix_access_token: Arc::new(tokio::sync::RwLock::new(String::new())),
-        kroki_url: std::env::var("KROKI_URL")
-            .unwrap_or_else(|_| "http://kroki.occitan-system.svc.cluster.local:8000".into()),
+        nats_url: std::env::var("NATS_URL")
+            .unwrap_or_else(|_| "nats://nats.occitan-system.svc.cluster.local:4222".into()),
     });
 
-    tokio::spawn(spawn_idle_reaper(Arc::clone(&state.room_sessions)));
     tokio::spawn(run_nervi_loop_if_component(Arc::clone(&state)));
-    tokio::spawn(run_matrix_client_loop(Arc::clone(&state)));
+    tokio::spawn(chat_loop::run_chat_loop(Arc::clone(&state)));
 
     let app = Router::new()
         .route("/trigger/chronicle", post(handle_chronicle))
@@ -182,10 +153,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         .route("/trigger/mission-pulse", post(handle_mission_pulse))
         .route("/trigger/intake", post(handle_intake))
         .route("/trigger/scan", post(handle_scan))
-        .route("/matrix/reply", post(handle_matrix_reply))
-        .route("/turn", post(handle_turn))
         .route("/health", axum::routing::get(|| async { "ok" }))
-        .route("/room-status", axum::routing::get(handle_room_status))
         .with_state(state);
 
     let addr = format!("0.0.0.0:{}", port);
