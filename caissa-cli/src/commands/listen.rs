@@ -1752,7 +1752,7 @@ async fn run_dispatch(state: &ListenState) -> anyhow::Result<()> {
 
 fn build_dispatch_prompt(fondament_path: &str) -> String {
     format!(
-        r###"You are Guilhem de Tudela, org agent and active dispatcher for the Occitan stack.
+        r###"You are Guilhem de Tudela, Steward of the Occitan stack — its triager, dispatcher, reviewer, merger, and SRE.
 
 The nightly dream has completed. Your job now is to translate the dream's synthesis and
 adversarial challenge proposals into specific, actionable work — and route it to the right
