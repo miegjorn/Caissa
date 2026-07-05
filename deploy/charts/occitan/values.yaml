@@ -35,36 +35,6 @@ farga:
     FARGA_PORT: "7500"
     FARGA_DB: /data/farga.db
     FARGA_DOCS: /data/docs
-# ─── Amassada ────────────────────────────────────────────────────────────────
-# Canvases are baked into the image at /canvases/stdlib.
-amassada:
-  image: ghcr.io/miegjorn/amassada
-  imageTag: sha-0f31789 # CI writes sha-<sha> here on every main push
-  replicas: 1
-  port: 7600
-  env:
-    AMASSADA_PORT: "7600"
-    AMASSADA_CANVAS_DIR: /canvases/stdlib
-    # Project registry path — mounted from the amassada-projects ConfigMap below.
-    AMASSADA_PROJECTS_PATH: /config/projects.toml
-    # ANTHROPIC_API_KEY is injected from the 'anthropic' secret (key: api-key).
-  # Project registry (multi-tenant dispatch). Maps Matrix rooms → Fondament
-  # persona + Farga project + MCP scopes. Empty by default: Guilhem runs via the
-  # org-session canvas fallback. Add [[projects]] entries to onboard project agents.
-  # Format: see the Amassada README "Project registry (projects.toml)" section.
-  projects: |
-    # Amassada project registry. Empty — no projects registered yet.
-    # [[projects]]
-    # id = "example-agent"
-    # fondament_persona = "fondament/projects/example-agent"
-    # matrix_rooms = ["!exampleRoomId:occitane.guilhem"]
-    # farga_project = "example-agent"
-    # mcp_scopes = ["farga:read", "farga:write:example-agent"]
-  meditation:
-    # Weekly meditation schedule — POST /trigger/meditate on all 8 components.
-    # Fires Sunday 02:00 UTC (after nightly dream+dispatch, before the week starts).
-    # Set to "" to disable.
-    schedule: "0 2 * * 0"
 # ─── Tick poller (self-paced periodic-skill wake delivery) ───────────────────
 tickPoller:
   image: ghcr.io/miegjorn/caissa
@@ -110,13 +80,13 @@ charradissa:
     agents:
       # Default route — Guilhem handles all rooms that have no explicit route.
       default: "http://guilhem.agents.svc.cluster.local:8080"
-      # Amassada-backed rooms: Charradissa injects project_id into the turn body and
-      # forwards to Amassada, which resolves the canvas and dispatches to the agent pod.
-      projectRoutes:
-        - rooms:
-            - "!zSeBDhFjVObXNpqAtF:occitane.guilhem"
-          projectId: "occitan"
-          endpoint: "http://amassada:7600/sessions/{room_id}/message"
+      # Project-routed rooms (Amassada-backed dispatch, retired 2026-07-04 —
+      # see Amassada README's retirement note). No replacement decided for
+      # room !zSeBDhFjVObXNpqAtF:occitane.guilhem yet; left unrouted
+      # (falls back to `default` above) rather than guessing a replacement —
+      # one-time continuity loss accepted on cutover, matching the Corrièr
+      # precedent.
+      projectRoutes: []
       # Component agents now run independent Matrix sessions — Charradissa
       # no longer relays for their rooms (see Occitan#per-agent-matrix-independence).
       # This list intentionally empty; Task 8's skip-list guard in
