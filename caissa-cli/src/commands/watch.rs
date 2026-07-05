@@ -1,7 +1,7 @@
 /// SRE watchdog — Level 1, no-LLM health probe.
 ///
 /// Runs a loop every WATCHDOG_INTERVAL_SECS (default 300) checking:
-///   - /health endpoints for Gardian, Farga, Amassada, Charradissa, Guilhem, Dispatcher
+///   - /health endpoints for Gardian, Farga, Charradissa, Guilhem, Dispatcher
 ///   - Farga recent signals (at least one means the chronicle cron has run before)
 ///   - /room-status on Guilhem + all component agents (see ROOM_STATUS_STUCK_THRESHOLD_SECS)
 ///
@@ -11,11 +11,11 @@
 /// Exits only on fatal startup errors — probe failures are logged and signalled, not fatal.
 ///
 /// All service URLs default to cluster-internal DNS and can be overridden via env vars:
-///   FARGA_URL, NERVI_MCP_URL, GARDIAN_URL, AMASSADA_URL, CHARRADISSA_URL, GUILHEM_URL, DISPATCHER_URL
+///   FARGA_URL, NERVI_MCP_URL, GARDIAN_URL, CHARRADISSA_URL, GUILHEM_URL, DISPATCHER_URL
 ///   WATCHDOG_INTERVAL_SECS (default 300)
 ///   WATCHDOG_PROJECT (default: occitan)
 ///
-/// `/health` on these six is a stateless "ok" with zero per-room awareness —
+/// `/health` on these five is a stateless "ok" with zero per-room awareness —
 /// confirmed live (2026-07-04) that a hung (not crashed) agent-sidecar.js
 /// process holding a room's mutex forever is invisible to it. `/room-status`
 /// closes that gap: each Guilhem/component-agent pod reports per-room
@@ -88,7 +88,6 @@ pub async fn run() -> anyhow::Result<()> {
     let services: Vec<(&str, String)> = vec![
         ("gardian",     std::env::var("GARDIAN_URL").unwrap_or_else(|_| "http://gardian.occitan-system.svc.cluster.local:7400".into())),
         ("farga",       farga_url.clone()),
-        ("amassada",    std::env::var("AMASSADA_URL").unwrap_or_else(|_| "http://amassada.occitan-system.svc.cluster.local:7600".into())),
         ("charradissa", std::env::var("CHARRADISSA_URL").unwrap_or_else(|_| "http://charradissa.occitan-system.svc.cluster.local:8448".into())),
         ("guilhem",     std::env::var("GUILHEM_URL").unwrap_or_else(|_| "http://guilhem.agents.svc.cluster.local:8080".into())),
         ("dispatcher",  std::env::var("DISPATCHER_URL").unwrap_or_else(|_| "http://dispatcher.agents.svc.cluster.local:9090".into())),
