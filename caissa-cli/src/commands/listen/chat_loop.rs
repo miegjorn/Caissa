@@ -18,10 +18,42 @@ use futures::StreamExt;
 /// /trigger/* handlers (cron_triggers.rs, queue_triggers.rs) already use for
 /// non-conversational work. No resume(), no continuity assumption beyond
 /// what build_graph_context already reconstructs from Farga.
-pub(crate) async fn run_single_turn(system_prompt: &str, content: &str) -> anyhow::Result<String> {
+///
+/// Wires `--mcp-config`/`--allowed-tools` the same way every other trigger
+/// path in this module does (see cron_triggers::run_sre_alert,
+/// queue_triggers::run_mission_pulse) -- Task 10's original rewrite spawned
+/// `claude` directly with neither, so conversational turns had zero MCP
+/// tools (Farga, Nervi, dispatcher, charradissa) available at all. The mcp
+/// config content is a pure function of `state`, so concurrent turns sharing
+/// this fixed temp path is safe -- every writer produces identical bytes.
+pub(crate) async fn run_single_turn(
+    state: &ListenState,
+    system_prompt: &str,
+    content: &str,
+) -> anyhow::Result<String> {
+    let mcp_config = serde_json::to_string(&serde_json::json!({
+        "mcpServers": agent_mcp_servers(state)
+    }))?;
+    let mcp_path = std::env::temp_dir().join(format!("{}-chat-loop-mcp.json", state.component_name));
+    std::fs::write(&mcp_path, &mcp_config)?;
+
+    let tools = agent_allowed_tools(&state.fondament_url, state).await.join(",");
+
     let output = tokio::process::Command::new("claude")
         .prefer_oauth_over_api_key()
-        .args(["--print", content, "--append-system-prompt", system_prompt])
+        .args([
+            "--print",
+            content,
+            "--append-system-prompt",
+            system_prompt,
+            "--mcp-config",
+            mcp_path.to_str().unwrap(),
+            "--allowed-tools",
+            &tools,
+        ])
+        .env("FARGA_URL", &state.farga_url)
+        .env("FARGA_PROJECT", &state.farga_project)
+        .envs(github_token_envs())
         .output()
         .await?;
 
@@ -116,7 +148,7 @@ async fn handle_chat_message(
         format!("{}\n\n{}", turn_block, msg.content)
     };
 
-    let reply_text = crate::commands::listen::run_single_turn(&system_prompt, &content).await?;
+    let reply_text = crate::commands::listen::run_single_turn(state, &system_prompt, &content).await?;
 
     let reply = ChatReply {
         conversation_id: msg.conversation_id,
