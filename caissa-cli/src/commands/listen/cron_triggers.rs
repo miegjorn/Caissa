@@ -235,12 +235,15 @@ pub(crate) async fn run_chronicle(state: &ListenState, prompt: &str) -> anyhow::
             post_signal(state, &response).await?;
         }
     } else {
-        // Claude path with MCP
-        let mcp_config = format!(
-            r#"{{"mcpServers":{{"farga":{{"type":"http","url":"{}"}}}}}}"#,
-            state.farga_mcp_url
-        );
-        let mcp_path = std::env::temp_dir().join("guilhem-mcp.json");
+        // Claude path with MCP. Was farga-only via a hand-rolled config until
+        // this fix -- the same drift run_dream's own 2026-07-04 fix already
+        // eliminated ("a second hand-rolled farga-only config drifting out of
+        // sync with them"), but chronicle never got the same treatment.
+        // Reuse agent_mcp_servers(state) like every other cron trigger.
+        let mcp_config = serde_json::to_string(&serde_json::json!({
+            "mcpServers": agent_mcp_servers(state)
+        }))?;
+        let mcp_path = std::env::temp_dir().join("guilhem-chronicle-mcp.json");
         std::fs::write(&mcp_path, &mcp_config)?;
 
         let output = tokio::process::Command::new("claude")
