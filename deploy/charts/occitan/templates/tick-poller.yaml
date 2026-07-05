@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tick-poller
+  namespace: occitan-system
+  labels:
+    {{- include "occitan.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "occitan.selectorLabels" (dict "component" "tick-poller" "context" .) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "occitan.selectorLabels" (dict "component" "tick-poller" "context" .) | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: tick-poller
+          image: {{ .Values.tickPoller.image }}:{{ .Values.tickPoller.imageTag }}
+          command: ["caissa", "tick-poller"]
+          env:
+            - name: NATS_URL
+              value: "nats://nervi-nats.occitan-system.svc.cluster.local:4222"
+            - name: FARGA_URL
+              value: "http://farga.occitan-system.svc.cluster.local:7500"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi

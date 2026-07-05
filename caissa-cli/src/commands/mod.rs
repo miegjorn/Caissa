@@ -9,4 +9,5 @@ pub mod report;
 pub mod sandbox;
 pub mod spawn;
 pub mod sync;
+pub mod tick_poller;
 pub mod watch;

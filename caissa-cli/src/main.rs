@@ -88,6 +88,17 @@ enum Commands {
     /// Writes a bug-signal to Farga on any anomaly.
     /// Runs as a sidecar in the Guilhem pod (independent of the main process).
     Watch,
+    /// Shared tick-poller: fires self-scheduled periodic-skill wakes
+    /// (chronicle/dream/mission-pulse) by polling Farga's /kv/schedule
+    /// namespace and publishing to each due component's tick subject.
+    TickPoller {
+        #[arg(long, env = "NATS_URL", default_value = "nats://nervi-nats.occitan-system.svc.cluster.local:4222")]
+        nats_url: String,
+        #[arg(long, env = "FARGA_URL", default_value = "http://farga.occitan-system.svc.cluster.local:7500")]
+        farga_url: String,
+        #[arg(long, default_value = "120")]
+        poll_interval_secs: u64,
+    },
     /// GitHub → NATS polling bridge (Occitan#36).
     /// Polls GitHub API for new/updated issues on tracked miegjorn/* repos
     /// and publishes them to occitan.github.issues.<component> NATS subjects.
@@ -162,6 +173,9 @@ async fn main() -> anyhow::Result<()> {
             commands::report::run(&url, &proj).await
         }
         Commands::Watch => commands::watch::run().await,
+        Commands::TickPoller { nats_url, farga_url, poll_interval_secs } => {
+            commands::tick_poller::run(&nats_url, &farga_url, poll_interval_secs).await
+        }
         Commands::Sync => commands::sync::run().await,
         Commands::Ingest { component } => {
             commands::ingest::run(component.as_deref()).await

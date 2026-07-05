@@ -65,6 +65,10 @@ amassada:
     # Fires Sunday 02:00 UTC (after nightly dream+dispatch, before the week starts).
     # Set to "" to disable.
     schedule: "0 2 * * 0"
+# ─── Tick poller (self-paced periodic-skill wake delivery) ───────────────────
+tickPoller:
+  image: ghcr.io/miegjorn/caissa
+  imageTag: latest # CI writes sha-<sha> here on every main push, matching guilhem's own imageTag convention
 # ─── Corrièr ──────────────────────────────────────────────────────────────────
 # Matrix Application Service registration -- as_token/hs_token live in the
 # 'corrier-as-tokens' k8s secret (agents namespace), read directly by the
