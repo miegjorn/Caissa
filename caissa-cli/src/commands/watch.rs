@@ -41,6 +41,7 @@ use caissa_core::config::load_config;
 use crate::commands::sync::repo_to_component;
 use serde_json::json;
 use std::collections::HashMap;
+use std::time::Instant;
 
 /// Repos polled for build (CI) status, using the same repo_to_component
 /// mapping github-sync (`caissa sync`) already uses. Occitan (the meta-repo)
@@ -54,6 +55,45 @@ const BUILD_STATUS_REPOS: &[&str] = &[
 /// (300s). A room stuck past this means the in-process timeout+kill did
 /// not fire as expected — a worse condition than the already-handled case.
 const ROOM_STATUS_STUCK_THRESHOLD_SECS: u64 = 360;
+
+#[cfg(test)]
+mod grace_window_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn in_grace_window_true_before_expiry() {
+        let mut map: HashMap<String, Instant> = HashMap::new();
+        map.insert("gardian".to_string(), Instant::now() + Duration::from_secs(60));
+        assert!(is_in_grace_window(&map, "gardian"));
+    }
+
+    #[test]
+    fn in_grace_window_false_after_expiry() {
+        let mut map: HashMap<String, Instant> = HashMap::new();
+        // Instant subtraction requires care -- Instant has no "in the past"
+        // constructor, so simulate expiry with a zero-duration window that's
+        // already elapsed by the time we check it.
+        map.insert("gardian".to_string(), Instant::now());
+        std::thread::sleep(Duration::from_millis(5));
+        assert!(!is_in_grace_window(&map, "gardian"));
+    }
+
+    #[test]
+    fn in_grace_window_false_for_unknown_component() {
+        let map: HashMap<String, Instant> = HashMap::new();
+        assert!(!is_in_grace_window(&map, "gardian"));
+    }
+}
+
+/// Whether `component` currently has an active restart-grace window.
+/// Pure and clock-only (no I/O) so it's directly unit-testable.
+fn is_in_grace_window(grace_windows: &HashMap<String, Instant>, component: &str) -> bool {
+    grace_windows
+        .get(component)
+        .map(|expiry| Instant::now() < *expiry)
+        .unwrap_or(false)
+}
 
 #[derive(serde::Deserialize)]
 struct RoomStatusEntry {
@@ -125,6 +165,35 @@ pub async fn run() -> anyhow::Result<()> {
         .timeout(std::time::Duration::from_secs(health_timeout_secs))
         .build()?;
 
+    // Restart-grace window: component name -> when its grace period expires.
+    // In-memory only (see this plan's Global Constraints) -- losing it on a
+    // watchdog restart costs one extra false positive next redeploy, not a
+    // correctness problem. Shared between this loop and the lifecycle
+    // consumer spawned below.
+    let grace_windows: std::sync::Arc<tokio::sync::Mutex<HashMap<String, std::time::Instant>>> =
+        std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+
+    let nats_url = std::env::var("NATS_URL")
+        .unwrap_or_else(|_| "nats://nervi-nats.occitan-system.svc.cluster.local:4222".into());
+    match nervi_core::NerviClient::connect(&nats_url).await {
+        Ok(nervi) => {
+            let grace_windows_for_consumer = std::sync::Arc::clone(&grace_windows);
+            tokio::spawn(async move {
+                run_lifecycle_consumer(nervi, grace_windows_for_consumer).await;
+            });
+        }
+        Err(e) => {
+            // Non-fatal, matching this module's own philosophy (probe
+            // failures are logged and signalled, not fatal): the watchdog
+            // keeps running exactly as it does today, just without grace
+            // suppression, until a future cycle... there is no retry here
+            // deliberately -- a NATS outage severe enough to fail this
+            // connect is itself worth knowing about via the existing
+            // /health and Farga-signal checks below.
+            tracing::warn!("sre-watchdog: NATS unreachable, restart-grace suppression disabled: {}", e);
+        }
+    }
+
     let github_token = std::env::var("GITHUB_TOKEN").or_else(|_| std::env::var("GH_TOKEN")).ok();
     if github_token.is_none() {
         tracing::warn!("GITHUB_TOKEN/GH_TOKEN not set — build-failure monitor disabled (rate-limited unauthenticated calls would be unreliable)");
@@ -157,6 +226,7 @@ pub async fn run() -> anyhow::Result<()> {
         // Health endpoint checks
         for (name, base_url) in &services {
             let url = format!("{}/health", base_url);
+            let in_grace = is_in_grace_window(&*grace_windows.lock().await, name);
             match client.get(&url).send().await {
                 Ok(resp) if resp.status().is_success() => {
                     tracing::debug!("{} /health OK", name);
@@ -164,12 +234,20 @@ pub async fn run() -> anyhow::Result<()> {
                 Ok(resp) => {
                     let msg = format!("{} /health returned {}", name, resp.status());
                     tracing::warn!("{}", msg);
-                    anomalies.push(msg);
+                    if in_grace {
+                        tracing::debug!("{} anomaly suppressed (within restart grace window)", name);
+                    } else {
+                        anomalies.push(msg);
+                    }
                 }
                 Err(e) => {
                     let msg = format!("{} /health unreachable: {}", name, e);
                     tracing::warn!("{}", msg);
-                    anomalies.push(msg);
+                    if in_grace {
+                        tracing::debug!("{} anomaly suppressed (within restart grace window)", name);
+                    } else {
+                        anomalies.push(msg);
+                    }
                 }
             }
         }
@@ -266,6 +344,62 @@ pub async fn run() -> anyhow::Result<()> {
         }
 
         tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
+    }
+}
+
+/// Consumes every component's restart-grace notices from one durable
+/// wildcard subscription (`LIFECYCLE_WILDCARD_SUBJECT`), arming
+/// `grace_windows` for whichever component the notice named -- read off
+/// the subject the message arrived on, not the payload (the payload only
+/// carries `grace_seconds`).
+async fn run_lifecycle_consumer(
+    nervi: nervi_core::NerviClient,
+    grace_windows: std::sync::Arc<tokio::sync::Mutex<HashMap<String, std::time::Instant>>>,
+) {
+    use futures::StreamExt;
+
+    let durable_name = "sre-watchdog-lifecycle";
+    let mut stream = match nervi
+        .consume_durable(corrier_core::LIFECYCLE_WILDCARD_SUBJECT, durable_name)
+        .await
+    {
+        Ok(s) => Box::pin(s),
+        Err(e) => {
+            tracing::error!("sre-watchdog: failed to open lifecycle consumer: {}", e);
+            return;
+        }
+    };
+
+    while let Some(result) = stream.next().await {
+        let raw = match result {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("sre-watchdog: lifecycle delivery error (non-fatal): {}", e);
+                continue;
+            }
+        };
+
+        let Some(component) = raw.subject.strip_prefix("occitan.lifecycle.") else {
+            tracing::warn!(
+                "sre-watchdog: lifecycle message on unexpected subject '{}' (non-fatal)",
+                raw.subject
+            );
+            continue;
+        };
+
+        match serde_json::from_str::<corrier_core::PerceivedMessage>(&raw.payload) {
+            Ok(corrier_core::PerceivedMessage::RestartingSoon { grace_seconds }) => {
+                let expiry = std::time::Instant::now() + std::time::Duration::from_secs(grace_seconds as u64);
+                grace_windows.lock().await.insert(component.to_string(), expiry);
+                tracing::info!("sre-watchdog: grace window armed for {} ({}s)", component, grace_seconds);
+            }
+            Ok(other) => {
+                tracing::warn!("sre-watchdog: unexpected lifecycle message variant: {:?}", other);
+            }
+            Err(e) => {
+                tracing::warn!("sre-watchdog: failed to decode lifecycle message (non-fatal): {}", e);
+            }
+        }
     }
 }
 
