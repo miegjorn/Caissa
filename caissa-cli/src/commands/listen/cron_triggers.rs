@@ -256,7 +256,7 @@ pub(crate) async fn run_chronicle(state: &ListenState, prompt: &str) -> anyhow::
                 "--mcp-config",
                 mcp_path.to_str().unwrap(),
                 "--allowed-tools",
-                "mcp__farga__search_signals,mcp__farga__read_context,mcp__farga__list_projects,mcp__farga__update_component_todo",
+                "mcp__farga__list_context_nodes,mcp__farga__read_context_node,mcp__farga__search_signals,mcp__farga__read_context,mcp__farga__list_projects,mcp__farga__update_component_todo",
             ])
             .env("FARGA_URL", &state.farga_url)
             .env("FARGA_PROJECT", &state.farga_project)
