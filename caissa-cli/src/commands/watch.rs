@@ -300,7 +300,17 @@ async fn publish_sre_alert(
     project: &str,
     anomalies: &[String],
 ) -> anyhow::Result<()> {
+    // "type": "sre-alert" is not decorative -- it's the serde(tag = "type")
+    // discriminant corrier_core::PerceivedMessage::SreAlert requires to
+    // deserialize at all (agent_subjects.rs). Without it, the message reaches
+    // NATS and gets acked (transport works) but chat_loop.rs::run_sre_alert_stream
+    // can never parse it into a PerceivedMessage, so run_sre_alert never runs --
+    // confirmed live via "missing field `type`" in Guilhem's logs. The extra
+    // project/source/anomaly_count/timestamp fields are kept for diagnostic
+    // value on the wire; PerceivedMessage has no deny_unknown_fields, so serde
+    // ignores them harmlessly during deserialization.
     let alert_payload = json!({
+        "type": "sre-alert",
         "project": project,
         "source": "sre-watchdog",
         "anomaly_count": anomalies.len(),
@@ -447,6 +457,43 @@ mod check_nervi_publish_response_tests {
         let body = "{\"result\":{\"content\":[],\"isError\":true},\"jsonrpc\":\"2.0\",\"id\":1}";
         let err = check_nervi_publish_response(body).expect_err("plain JSON isError response must still be classified as a failure");
         assert!(err.contains("no error text"));
+    }
+
+    /// Regression test for a live bug: the sre-alert payload published to
+    /// occitan.sre.alerts reached NATS and got acked (transport worked, per
+    /// the qualifier fix covered above), but had no "type" field, so
+    /// corrier_core::PerceivedMessage (tagged `#[serde(tag = "type")]`) could
+    /// never deserialize it -- confirmed live via Guilhem's "missing field
+    /// `type`" log. This builds the exact payload `publish_sre_alert` sends
+    /// and asserts it actually deserializes as `PerceivedMessage::SreAlert`
+    /// with the right anomalies, with no live network call.
+    #[test]
+    fn sre_alert_payload_deserializes_as_perceived_message_sre_alert() {
+        let anomalies = vec![
+            "gardian /health returned 503".to_string(),
+            "farga has no signals for project 'occitan'".to_string(),
+        ];
+        let alert_payload = json!({
+            "type": "sre-alert",
+            "project": "occitan",
+            "source": "sre-watchdog",
+            "anomaly_count": anomalies.len(),
+            "anomalies": anomalies,
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+        });
+
+        let parsed: corrier_core::PerceivedMessage = serde_json::from_value(alert_payload)
+            .expect("sre-alert payload must deserialize as a PerceivedMessage");
+
+        assert_eq!(
+            parsed,
+            corrier_core::PerceivedMessage::SreAlert {
+                anomalies: vec![
+                    "gardian /health returned 503".to_string(),
+                    "farga has no signals for project 'occitan'".to_string(),
+                ],
+            }
+        );
     }
 }
 
