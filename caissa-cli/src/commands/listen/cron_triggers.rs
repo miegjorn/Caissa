@@ -800,3 +800,171 @@ not the literal string above.
         project = project,
     )
 }
+
+// ── Meditate — self-correction (Fondament's occitan/amassada skill) ──────────
+
+/// Self-paced periodic skill (schedule_tick convention, armed via a PUT to
+/// {farga_url}/kv/schedule/<component>__meditate). Unlike chronicle/dream/
+/// farcaster (guilhem-only), meditation runs identically in every one of the
+/// 9 agent pods -- each meditates on itself, never on another component.
+/// See build_meditate_prompt for the full recipe (occitan/amassada's
+/// "Self-correction (meditation)" section).
+pub(crate) async fn run_meditate(state: &ListenState) -> anyhow::Result<()> {
+    let mcp_config = serde_json::to_string(&serde_json::json!({
+        "mcpServers": agent_mcp_servers(state)
+    }))?;
+    let mcp_path = std::env::temp_dir().join(format!("{}-meditate-mcp.json", state.component_name));
+    std::fs::write(&mcp_path, &mcp_config)?;
+
+    let prompt = build_meditate_prompt(&state.component_name, &state.farga_project);
+
+    let output = tokio::process::Command::new("claude")
+        .prefer_oauth_over_api_key()
+        .args([
+            "--print",
+            &prompt,
+            "--model",
+            &state.dream_model,
+            "--mcp-config",
+            mcp_path.to_str().unwrap(),
+            "--allowed-tools",
+            "Bash,mcp__farga__search_signals,mcp__farga__read_context,mcp__farga__write_signal,mcp__farga__write_artifact,mcp__farga__list_context_nodes,mcp__farga__read_context_node,mcp__dispatcher__invoke_agent,mcp__dispatcher__get_agent_result,mcp__nervi__nervi_publish",
+        ])
+        .env("FARGA_URL", &state.farga_url)
+        .env("FARGA_PROJECT", &state.farga_project)
+        .envs(github_token_envs())
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("meditate claude exited with error: {}", stderr);
+    }
+
+    let report = String::from_utf8_lossy(&output.stdout).to_string();
+    if report.trim().is_empty() {
+        tracing::warn!("meditate: empty output from claude");
+        return Ok(());
+    }
+
+    tracing::info!("meditate: self-correction pass complete for {}", state.component_name);
+    Ok(())
+}
+
+pub(crate) fn build_meditate_prompt(component: &str, project: &str) -> String {
+    let target_domain = if component == "guilhem" { "occitan" } else { component };
+    format!(
+        r###"You are the {component} agent for the Occitan stack. This is your self-paced
+meditation tick -- a structured self-correction pass, per your occitan/amassada skill's
+"Self-correction (meditation)" recipe (a concrete Level 2 instantiation: extract axioms,
+seal them to a genuinely isolated evaluator, synthesize).
+
+## STEP 1 — Extract
+
+Read your own Farga context:
+- mcp__farga__list_context_nodes (project: "{project}", role: "org") -- orient yourself
+- mcp__farga__read_context_node for the nodes relevant to your own component
+  ([<your-component>][codebase], [<your-component>][architecture])
+- mcp__farga__search_signals (project: "{project}") -- recent activity in your own domain
+
+From this, distill a compact numbered axiom document: the core design decisions,
+invariants, non-obvious constraints, and what you are explicitly NOT responsible for.
+Each axiom gets a one-line rationale. This step is internal -- nothing is dispatched yet.
+
+## STEP 2 — Seal
+
+Call mcp__dispatcher__invoke_agent with:
+  domain: "{target_domain}"
+  facet: "axiom-evaluator"
+  task: <the axiom document text you just wrote, and NOTHING else -- no reasoning
+         trace, no raw Farga context, no session history>
+  session_id: "meditate-{component}-<current UTC timestamp, e.g. via
+              `date -u +%Y%m%dT%H%M%SZ`>"
+  caller: "{component}/meditate/coordinator"
+
+axiom-evaluator is a purpose-built, zero-tool role (no Farga, no code access) --
+whatever you pass as `task` is the entirety of what it will ever see. This is a real
+seal, not a simulated one: choose what you pass carefully.
+
+## STEP 3 — Read
+
+Poll mcp__dispatcher__get_agent_result with the job_id and assignment_id invoke_agent
+returned, until it reports completion. The evaluator's reply is a structured report
+under five headings: COHERENCE, COMPLETENESS, STRENGTH, OPTIMIZATIONS, RISK
+CLASSIFICATION (Class 1-4 per system-defence.md's convention).
+
+## STEP 4 — Synthesize
+
+Produce a validated axiom set (refined from Step 1 using the evaluator's findings) and
+the risk-classed optimization proposals. Write a Farga signal using mcp__farga__write_signal:
+- project: "{project}"
+- source: "{component}-meditation"
+- content: the validated axioms, the optimization proposals with risk class, and a
+  one-line note on what changed (or didn't) since your last meditation.
+
+If the output is substantial, also call mcp__farga__write_artifact (kind: "design") for
+durability.
+
+## STEP 5 — Escalate, don't pause
+
+Class 3+ proposals are not a synchronous approval gate. For each one:
+- If actionable now: mcp__nervi__nervi_publish(subject="occitan.dispatch.guilhem",
+  payload=JSON.stringify({{"type":"dispatch","task":"<the proposal, with its risk
+  class and rationale>","dispatched_by":"{component}-meditation","risk_class":<3 or 4>}}))
+- Otherwise: it is already in the Farga signal from Step 4 for Guilhem's own
+  chronicle/dream passes to pick up.
+Do not wait for a reply. There is no live human-approval block in this flow.
+
+## STEP 6 — Re-arm your own next tick
+
+Near the end of this run, PUT your next scheduled wake to Farga's KV store:
+
+curl -X PUT {{farga_url}}/kv/schedule/{component}__meditate \
+  -H "Content-Type: application/json" \
+  -d '{{"value": {{"next_due": "<ISO8601 UTC, your own judgment -- default roughly
+  one week out if nothing suggests otherwise>", "note": "<one line on why this
+  interval>"}}, "ttl_seconds": 2592000}}'
+
+Use the actual {{farga_url}} value from your own environment (FARGA_URL), not the
+literal string above.
+"###,
+        component = component,
+        project = project,
+        target_domain = target_domain,
+    )
+}
+
+#[cfg(test)]
+mod meditate_prompt_tests {
+    use super::*;
+
+    #[test]
+    fn build_meditate_prompt_names_the_calling_component() {
+        let prompt = build_meditate_prompt("farga", "occitan");
+        assert!(prompt.contains("You are the farga agent"));
+    }
+
+    #[test]
+    fn build_meditate_prompt_targets_own_domain_for_a_component_agent() {
+        let prompt = build_meditate_prompt("farga", "occitan");
+        assert!(prompt.contains("domain: \"farga\""));
+    }
+
+    #[test]
+    fn build_meditate_prompt_targets_occitan_domain_for_guilhem() {
+        let prompt = build_meditate_prompt("guilhem", "occitan");
+        assert!(prompt.contains("domain: \"occitan\""));
+    }
+
+    #[test]
+    fn build_meditate_prompt_seals_to_the_axiom_evaluator_facet() {
+        let prompt = build_meditate_prompt("caissa", "occitan");
+        assert!(prompt.contains("facet: \"axiom-evaluator\""));
+    }
+
+    #[test]
+    fn build_meditate_prompt_rearms_its_own_schedule_key() {
+        let prompt = build_meditate_prompt("nervi", "occitan");
+        assert!(prompt.contains("/kv/schedule/nervi__meditate"));
+    }
+}

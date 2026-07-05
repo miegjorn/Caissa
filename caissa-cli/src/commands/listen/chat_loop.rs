@@ -259,6 +259,7 @@ async fn run_tick_stream(state: Arc<ListenState>, nervi: nervi_core::NerviClient
                                 "dream" => crate::commands::listen::run_dream(&state).await,
                                 "mission-pulse" => crate::commands::listen::run_mission_pulse(&state).await,
                                 "farcaster" => crate::commands::listen::run_farcaster(&state).await,
+                                "meditate" => crate::commands::listen::run_meditate(&state).await,
                                 other => {
                                     tracing::warn!("tick stream: unknown skill '{}', ignoring", other);
                                     Ok(())
