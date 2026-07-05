@@ -212,6 +212,7 @@ mcp_body = json.dumps({
         'name': 'nervi_publish',
         'arguments': {
             'subject': assignment_reply_subject,
+            'qualifier': 'info',
             'payload': output
         }
     }
@@ -226,9 +227,49 @@ req = urllib.request.Request(
     },
     method='POST'
 )
+
+def check_nervi_publish_response(body):
+    """Classify a raw Nervi MCP tools/call HTTP response body as success or
+    failure. Nervi's streamable-http transport frames each response as SSE:
+    'event: message\\ndata: {<json-rpc response>}\\n\\n'. HTTP 200 is returned
+    even for a JSON-RPC-level or tool-input-validation failure (e.g. a
+    rejected nervi_publish call missing the required qualifier argument),
+    so the body itself must be parsed and inspected for a top-level 'error'
+    field or a 'result.isError == true'. Mirrors
+    caissa-cli/src/commands/watch.rs::check_nervi_publish_response.
+    Returns None on a clean result, or the error text on a detected failure.
+    """
+    json_str = body
+    for line in body.splitlines():
+        if line.startswith('data: '):
+            json_str = line[len('data: '):]
+            break
+
+    try:
+        parsed = json.loads(json_str)
+    except Exception as e:
+        return 'could not parse nervi MCP response body: %s (body: %s)' % (e, body)
+
+    if isinstance(parsed, dict) and 'error' in parsed:
+        err = parsed['error'] or {}
+        return 'jsonrpc error: %s' % err.get('message', 'unknown error')
+
+    result = parsed.get('result', {}) if isinstance(parsed, dict) else {}
+    if result.get('isError'):
+        content = result.get('content') or []
+        text = content[0].get('text') if content and isinstance(content[0], dict) else None
+        return text or '(no error text in response)'
+
+    return None
+
 try:
-    urllib.request.urlopen(req, timeout=10)
-    print('[agent] result published to nervi subject: ' + assignment_reply_subject)
+    resp = urllib.request.urlopen(req, timeout=10)
+    body = resp.read().decode('utf-8', errors='replace')
+    error = check_nervi_publish_response(body)
+    if error:
+        print('[agent] warning: nervi rejected result publish to ' + assignment_reply_subject + ': ' + error, file=sys.stderr)
+    else:
+        print('[agent] result published to nervi subject: ' + assignment_reply_subject)
 except Exception as e:
     print('[agent] warning: failed to publish result to nervi: ' + str(e), file=sys.stderr)
     # Don't fail the job — output already happened (and Farga already has it)
