@@ -87,14 +87,70 @@ For all code work, use nervi_publish to occitan.dispatch.<component>.\n\
 The dispatcher will reject any other combination — this is a hard guard, not a suggestion.\n\
 --- end context graph ---";
 
+    let skill_constraints = resolve_skill_constraints(fondament_url, &skills).await;
+
     let prompt = format!(
-        "{}\n\n{}\n\n{}\n\nYou are replying in Matrix room {}.",
+        "{}\n\n{}\n\n{}\n\n{}\n\nYou are replying in Matrix room {}.",
         discipline_preamble,
         role_context.trim_end(),
         context_graph_preamble,
+        skill_constraints,
         room_id,
     );
     (prompt, skills, models, is_aporia, thinking_budget)
+}
+
+/// Fetch each declared skill's `rules.prompt_constraint` text from
+/// fondament-server and concatenate them, in declaration order, each
+/// separated by a blank line. Missing/unreachable skills are skipped
+/// (logged, not fatal) -- matches `dispatch.rs::load_scope_rules`'s
+/// existing fetch-by-id pattern (`GET {fondament_url}/raw/{id}@latest`),
+/// generalized from two hardcoded IDs to whatever a persona actually
+/// declares.
+pub(crate) async fn resolve_skill_constraints(fondament_url: &str, skill_ids: &[String]) -> String {
+    if skill_ids.is_empty() {
+        return String::new();
+    }
+
+    #[derive(serde::Deserialize, Default)]
+    struct SkillRulesBlock {
+        prompt_constraint: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct SkillFile {
+        #[serde(default)]
+        rules: Option<SkillRulesBlock>,
+    }
+
+    let client = reqwest::Client::new();
+    let mut constraints = Vec::new();
+
+    for skill_id in skill_ids {
+        let url = format!("{}/raw/{}@latest", fondament_url.trim_end_matches('/'), skill_id);
+        let result = client
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await;
+
+        match result {
+            Ok(resp) if resp.status().is_success() => match resp.text().await {
+                Ok(text) => match serde_yaml::from_str::<SkillFile>(&text) {
+                    Ok(skill) => {
+                        if let Some(c) = skill.rules.and_then(|r| r.prompt_constraint) {
+                            constraints.push(c);
+                        }
+                    }
+                    Err(e) => tracing::warn!("skill {} failed to parse: {}", skill_id, e),
+                },
+                Err(e) => tracing::warn!("skill {} response body unreadable: {}", skill_id, e),
+            },
+            Ok(resp) => tracing::warn!("skill {} returned {}", skill_id, resp.status()),
+            Err(e) => tracing::warn!("skill {} unreachable (non-fatal): {}", skill_id, e),
+        }
+    }
+
+    constraints.join("\n\n")
 }
 
 /// Build the per-turn text block prepended to every message sent to a room's
@@ -240,4 +296,21 @@ pub(crate) async fn agent_allowed_tools(fondament_url: &str, state: &ListenState
         "mcp__farga__read_context_node".to_string(),
         "mcp__farga__list_context_nodes".to_string(),
     ]
+}
+
+#[cfg(test)]
+mod skill_resolution_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn resolve_skill_constraints_against_unreachable_fondament_returns_empty_not_panic() {
+        let result = resolve_skill_constraints("http://127.0.0.1:1", &["occitan/amassada".to_string()]).await;
+        assert_eq!(result, "");
+    }
+
+    #[tokio::test]
+    async fn resolve_skill_constraints_with_no_skills_returns_empty() {
+        let result = resolve_skill_constraints("http://127.0.0.1:1", &[]).await;
+        assert_eq!(result, "");
+    }
 }
