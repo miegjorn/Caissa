@@ -180,6 +180,21 @@ recorded to Farga automatically, so do not try to post it yourself.
 
 Be faithful, not verbose. The chronicle is for future agents (including your next
 instance) to understand where the stack stands.
+
+---
+
+## Re-arm your own next tick
+
+Near the end of this run, PUT your next scheduled wake to Farga's KV store:
+
+curl -X PUT {{farga_url}}/kv/schedule/guilhem__chronicle \
+  -H "Content-Type: application/json" \
+  -d '{{"value": {{"next_due": "<ISO8601 UTC, your own judgment -- default roughly
+  six hours out (matching chronicle's original cadence) if nothing suggests
+  otherwise>", "note": "<one line on why this interval>"}}, "ttl_seconds": 2592000}}'
+
+Use the actual {{farga_url}} value from your own environment (FARGA_URL), not the
+literal string above.
 "#,
         reason = reason,
         project = project,
@@ -680,6 +695,21 @@ own sake; it is how the stack avoids mistaking inertia for wisdom.
 
 **Your written response** is the dream report — concise, substantive, forward-looking.
 Do not just narrate what you did. Chronicle what the stack is becoming.
+
+---
+
+## PHASE 5 — Re-arm your own next tick
+
+Near the end of this run, PUT your next scheduled wake to Farga's KV store:
+
+curl -X PUT {{farga_url}}/kv/schedule/guilhem__dream \
+  -H "Content-Type: application/json" \
+  -d '{{"value": {{"next_due": "<ISO8601 UTC, your own judgment -- default roughly
+  one day out (matching dream's original nightly cadence) if nothing suggests
+  otherwise>", "note": "<one line on why this interval>"}}, "ttl_seconds": 2592000}}'
+
+Use the actual {{farga_url}} value from your own environment (FARGA_URL), not the
+literal string above.
 "###,
         project = project,
         constraint = guilhem_dispatch_constraint(fondament_path),
@@ -932,6 +962,23 @@ literal string above.
         project = project,
         target_domain = target_domain,
     )
+}
+
+#[cfg(test)]
+mod self_repace_tests {
+    use super::*;
+
+    #[test]
+    fn build_dream_prompt_rearms_its_own_schedule_key() {
+        let prompt = build_dream_prompt("/fondament", "occitan");
+        assert!(prompt.contains("/kv/schedule/guilhem__dream"));
+    }
+
+    #[test]
+    fn build_chronicle_prompt_rearms_its_own_schedule_key() {
+        let prompt = build_chronicle_prompt("/fondament", "self-paced tick", "occitan");
+        assert!(prompt.contains("/kv/schedule/guilhem__chronicle"));
+    }
 }
 
 #[cfg(test)]

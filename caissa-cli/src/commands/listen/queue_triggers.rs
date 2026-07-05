@@ -554,6 +554,21 @@ Write a signal to Farga (mcp__farga__write_signal):
   - Open questions for Pierre-Luc (if any — Class 3+ items only)
 
 Your written response IS the mission summary — it is recorded to Farga automatically.
+
+---
+
+## STEP 6 — Re-arm your own next tick
+
+Near the end of this run, PUT your next scheduled wake to Farga's KV store:
+
+curl -X PUT {{farga_url}}/kv/schedule/guilhem__mission-pulse \
+  -H "Content-Type: application/json" \
+  -d '{{"value": {{"next_due": "<ISO8601 UTC, your own judgment -- default roughly
+  one week out (matching mission-pulse's original weekly cadence) if nothing
+  suggests otherwise>", "note": "<one line on why this interval>"}}, "ttl_seconds": 2592000}}'
+
+Use the actual {{farga_url}} value from your own environment (FARGA_URL), not the
+literal string above.
 "###,
         constraint = guilhem_dispatch_constraint(fondament_path),
     )
@@ -776,3 +791,14 @@ Your written response IS the intake summary — recorded to Farga automatically.
     )
 }
 
+
+#[cfg(test)]
+mod self_pace_tests {
+    use super::*;
+
+    #[test]
+    fn build_mission_pulse_prompt_rearms_its_own_schedule_key() {
+        let prompt = build_mission_pulse_prompt("/fondament");
+        assert!(prompt.contains("/kv/schedule/guilhem__mission-pulse"));
+    }
+}

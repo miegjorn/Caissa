@@ -17,10 +17,6 @@ fondament:
   # fondament-server — resolved live at runtime, not a vendored local copy.
   # See caissa_core::agent::fetch_fondament_def.
   url: "http://fondament.occitan-system.svc.cluster.local:7800"
-# Chronicle schedule — how often Guilhem wakes to observe and record.
-# Uses Argo Workflows CronWorkflow syntax (standard cron).
-# Kept infrequent to avoid token burn on quiet periods.
-chronicleSchedule: "0 */6 * * *" # every 6 hours
 sre:
   # How long to wait for a /health response before counting it as a failure (seconds).
   healthTimeoutSecs: 10
@@ -40,8 +36,6 @@ backlog:
   # Matrix room ID to post the backlog review summary to. Empty = posting disabled.
   matrixRoomId: ""
 dream:
-  # Cron schedule for the nightly dream consolidation (daily 03:00 UTC).
-  schedule: "0 3 * * *"
   # Matrix room ID to post the dream report summary to. Empty = posting disabled.
   matrixRoomId: ""
   # Model for dream synthesis. Sonnet is appropriate — dream requires genuine reasoning.
@@ -52,11 +46,6 @@ dispatch:
   # Post-dream dispatch — fires 1h after dream so Farga signals are ready.
   # Guilhem reads dream report + adversarial challenges and routes to component agents.
   schedule: "0 4 * * *"
-missionPulse:
-  # Weekly mission pulse — Monday 05:00 UTC.
-  # Guilhem manages the Initiative→Epic hierarchy and sets direction for the week.
-  # Component agents consume Epics via issue-sync (06:00 UTC same day).
-  schedule: "0 5 * * 1"
 githubSync:
   # Poll interval in seconds (default: 300 = 5 min).
   # Lower values increase GitHub API usage — keep >= 60 to stay within rate limits.
