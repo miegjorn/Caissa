@@ -1,5 +1,5 @@
 image: ghcr.io/miegjorn/fondament-server
-imageTag: sha-56aaff0
+imageTag: sha-3b59890
 port: 7800
 definitionsPath: /fondament/definitions
 fargaUrl: http://farga.occitan-system.svc.cluster.local:7500
