@@ -1,12 +1,11 @@
-/// Agent pod daemon — HTTP listener plus a Nervi-driven chat loop.
+/// Agent pod daemon — HTTP listener plus a Nervi-driven perceive loop.
 ///
-/// `POST /trigger/chronicle` — accepts chronicle trigger events from Argo
-/// Workflows, git webhooks, or cron. One-shot: runs `claude --print "<task>"`
-/// as a subprocess, posts the output as a Signal to Farga, exits.
-///
-/// `POST /trigger/sre-alert` — CronWorkflow-triggered (every 30min). Fetches
-/// recent watchdog signals from Farga; if any are present and SRE_MATRIX_ROOM_ID
-/// is configured, posts a formatted alert to the Matrix room.
+/// `/trigger/chronicle`, `/trigger/sre-alert`, `/trigger/dream`, and
+/// `/trigger/mission-pulse` are gone: chronicle/dream/mission-pulse are now
+/// self-paced (tick-poller, Task 2/6), delivered as `Tick` messages on this
+/// pod's perceive loop; sre-alert is now purely reactive, delivered the
+/// instant the SRE watchdog detects an anomaly (Task 4), never on a poll
+/// cadence. See `chat_loop.rs`.
 ///
 /// `POST /trigger/backlog-review` — CronWorkflow-triggered (weekly). Guilhem
 /// reads open GitHub issues across miegjorn repos, synthesizes a backlog review,
@@ -14,17 +13,19 @@
 ///
 /// `GET /health` — liveness probe; returns `200 ok`.
 ///
-/// Chat turns no longer arrive over HTTP. `chat_loop::run_chat_loop` (spawned
-/// below, alongside the HTTP server) continuously consumes this component's
-/// Nervi inbound chat subject (`corrier_core::consume_inbound`) -- every room
-/// this component is in, one subscription -- builds fresh context from Farga
-/// for each message (no SDK `resume()`, no per-room child process, no
-/// in-memory session map), and publishes the reply to Nervi's outbound side
-/// (`corrier_core::publish_outbound`). Corrièr's write gateway delivers it to
-/// Matrix; this pod never touches a Matrix credential. This replaces the
-/// former `agent-sidecar.js` child-process-per-room model and its
-/// `/matrix/reply`, `/turn`, and `/room-status` HTTP routes entirely -- see
-/// `chat_loop.rs`.
+/// Chat turns no longer arrive over HTTP. `chat_loop::run_perceive_loop`
+/// (spawned below, alongside the HTTP server) continuously consumes this
+/// component's Nervi inbound chat subject (`corrier_core::consume_inbound`)
+/// -- every room this component is in, one subscription -- builds fresh
+/// context from Farga for each message (no SDK `resume()`, no per-room child
+/// process, no in-memory session map), and publishes the reply to Nervi's
+/// outbound side (`corrier_core::publish_outbound`). Corrièr's write gateway
+/// delivers it to Matrix; this pod never touches a Matrix credential. The
+/// same loop also perceives dispatch orders (`occitan.dispatch.<component>`),
+/// self-scheduled ticks (`occitan.tick.<component>.*`), and (guilhem only)
+/// reactive SRE alerts (`occitan.sre.alerts`) -- see `chat_loop.rs`. This
+/// replaces the former `agent-sidecar.js` child-process-per-room model and
+/// its `/matrix/reply`, `/turn`, and `/room-status` HTTP routes entirely.
 ///
 /// Token usage is proportional to actual events for chronicle triggers; chat
 /// turns cost tokens per message (no idle-session cost, since there is no
@@ -88,17 +89,22 @@ pub(crate) struct ListenState {
     /// `config.generation` with any `-agent` suffix trimmed, matching
     /// `repo_to_component`'s convention in `sync.rs`.
     component_name: String,
-    /// NATS/JetStream broker URL for this pod's Nervi chat-loop connection
-    /// (see chat_loop::run_chat_loop). Corrièr's own gateways connect to the
-    /// same broker under the same env var.
+    /// NATS/JetStream broker URL for this pod's Nervi perceive-loop connection
+    /// (see chat_loop::run_perceive_loop). Corrièr's own gateways connect to
+    /// the same broker under the same env var.
     nats_url: String,
 }
 
 #[derive(Deserialize)]
 pub struct TriggerReq {
-    /// Human-readable reason for the chronicle run.
+    /// Human-readable reason for the run.
     pub reason: String,
-    /// Optional specific prompt override. If absent, uses the default chronicle prompt.
+    /// Optional specific prompt override. Unused since Task 3 removed the
+    /// chronicle HTTP handler (the only reader) -- chronicle is now
+    /// self-paced via Tick messages, which carry no caller-supplied prompt
+    /// override. Kept on the wire struct since other /trigger/* handlers
+    /// still deserialize a TriggerReq body that may include this field.
+    #[allow(dead_code)]
     pub prompt: Option<String>,
 }
 
@@ -142,15 +148,17 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
     });
 
     tokio::spawn(run_nervi_loop_if_component(Arc::clone(&state)));
-    tokio::spawn(chat_loop::run_chat_loop(Arc::clone(&state)));
+    tokio::spawn(chat_loop::run_perceive_loop(Arc::clone(&state)));
 
+    // /trigger/chronicle, /trigger/sre-alert, /trigger/dream, /trigger/mission-pulse
+    // are removed: chronicle/dream/mission-pulse are now self-paced (schedule_tick,
+    // Task 2/6), delivered as Tick messages on this pod's perceive loop instead of
+    // an external CronWorkflow HTTP hit; sre-alert is now purely reactive, delivered
+    // the instant the SRE watchdog detects an anomaly (Task 4), not on any poll
+    // cadence. backlog-review/intake/scan are unaffected -- explicitly out of scope.
     let app = Router::new()
-        .route("/trigger/chronicle", post(handle_chronicle))
-        .route("/trigger/sre-alert", post(handle_sre_alert))
         .route("/trigger/backlog-review", post(handle_backlog_review))
-        .route("/trigger/dream", post(handle_dream))
         .route("/trigger/dispatch", post(handle_dispatch))
-        .route("/trigger/mission-pulse", post(handle_mission_pulse))
         .route("/trigger/intake", post(handle_intake))
         .route("/trigger/scan", post(handle_scan))
         .route("/health", axum::routing::get(|| async { "ok" }))

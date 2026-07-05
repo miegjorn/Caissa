@@ -1,61 +1,18 @@
 use super::*;
 
-pub(crate) async fn handle_chronicle(
-    State(state): State<Arc<ListenState>>,
-    Json(req): Json<TriggerReq>,
-) -> StatusCode {
-    tracing::info!("chronicle trigger received: {}", req.reason);
-
-    let prompt = req
-        .prompt
-        .unwrap_or_else(|| build_chronicle_prompt(&state.fondament_path, &req.reason, &state.farga_project));
-
-    tokio::spawn(async move {
-        match run_chronicle(&state, &prompt).await {
-            Ok(_) => tracing::info!("chronicle run complete"),
-            Err(e) => tracing::error!("chronicle run failed: {}", e),
-        }
-    });
-
-    StatusCode::ACCEPTED
-}
-
-/// POST /trigger/sre-alert — CronWorkflow-triggered (every 30min).
-///
-/// Fetches recent bug-signals written by the sre-watchdog from Farga.
-/// If any are found and SRE_MATRIX_ROOM_ID is configured, posts a
-/// formatted alert directly to the Matrix room using the SYNAPSE_ADMIN_TOKEN
-/// and SYNAPSE_URL that the initContainer injects at pod startup.
-/// Silent (202, no Matrix post) when all-clear or alerting is not configured.
-pub(crate) async fn handle_sre_alert(
-    State(state): State<Arc<ListenState>>,
-    Json(req): Json<TriggerReq>,
-) -> StatusCode {
-    tracing::info!("sre-alert trigger received: {}", req.reason);
-
-    let state_clone = Arc::clone(&state);
-    tokio::spawn(async move {
-        if let Err(e) = run_sre_alert(&state_clone).await {
-            tracing::error!("sre-alert run failed: {}", e);
-        }
-    });
-
-    StatusCode::ACCEPTED
-}
-
 /// Reads GH_TOKEN/GITHUB_TOKEN fresh from /creds/tokens.env at call time, so each
 /// spawned `claude` subprocess picks up whatever the container's background refresh
 /// loop most recently minted. This process's own inherited environment is fixed at
 /// its own startup and never reflects later rewrites of that file, so every call
 /// site that spawns `claude` must re-read here rather than relying on inherited env.
-pub(crate) async fn run_sre_alert(state: &ListenState) -> anyhow::Result<()> {
+pub(crate) async fn run_sre_alert(state: &ListenState, anomalies: &[String]) -> anyhow::Result<()> {
     let mcp_config = serde_json::to_string(&serde_json::json!({
         "mcpServers": agent_mcp_servers(state)
     }))?;
     let mcp_path = std::env::temp_dir().join("guilhem-sre-alert-mcp.json");
     std::fs::write(&mcp_path, &mcp_config)?;
 
-    let prompt = build_sre_alert_prompt(&state.fondament_path);
+    let prompt = build_sre_alert_prompt(&state.fondament_path, anomalies);
 
     let output = tokio::process::Command::new("claude")
         .prefer_oauth_over_api_key()
@@ -84,31 +41,25 @@ pub(crate) async fn run_sre_alert(state: &ListenState) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub(crate) fn build_sre_alert_prompt(fondament_path: &str) -> String {
-    format!(r###"You are Guilhem de Tudela, org agent. The SRE watchdog has detected health anomalies.
+pub(crate) fn build_sre_alert_prompt(fondament_path: &str, anomalies: &[String]) -> String {
+    let anomaly_list = anomalies
+        .iter()
+        .map(|a| format!("  - {}", a))
+        .collect::<Vec<_>>()
+        .join("\n");
 
-Your job: read the alerts, identify which component owns each failure, dispatch a targeted
-repair task to that component's Nervi dispatch subject.
+    format!(r###"You are Guilhem de Tudela, org agent. The SRE watchdog has detected health
+anomalies, delivered directly to you (no fetch needed):
+
+{anomalies}
 
 {constraint}
 
 ---
 
-## STEP 1 — Read alerts
+## STEP 1 — Evaluate
 
-Call nervi_subscribe with subject="occitan.sre.alerts" to pull recent alerts from the
-NATS subject. Use max_messages=20 and a short timeout.
-
-Also call mcp__farga__search_signals to find signals with source="sre-watchdog" from the
-last hour (as a fallback if NATS has no messages yet).
-
-## STEP 2 — Evaluate
-
-If no alerts are found in either source:
-- Stop. Write a brief Farga signal: source="guilhem-sre-dispatch", content="SRE alert scan: all clear — no anomalies found."
-- Do not dispatch.
-
-If alerts ARE found, for each anomaly identify the responsible component:
+For each anomaly identify the responsible component:
 - "gardian" → dispatch subject: occitan.dispatch.gardian
 - "farga" → dispatch subject: occitan.dispatch.farga
 - "amassada" → dispatch subject: occitan.dispatch.amassada
@@ -117,7 +68,7 @@ If alerts ARE found, for each anomaly identify the responsible component:
 - "nervi" → dispatch subject: occitan.dispatch.nervi
 - "guilhem" → Escalate via Farga (cannot dispatch to yourself; write to Farga source="guilhem-sre-escalate")
 
-## STEP 3 — Dispatch
+## STEP 2 — Dispatch
 
 For each affected component, publish a repair task to its Nervi dispatch subject:
 nervi_publish(subject="occitan.dispatch.<component>", payload=JSON.stringify({{
@@ -129,12 +80,13 @@ nervi_publish(subject="occitan.dispatch.<component>", payload=JSON.stringify({{
   "review_required": false
 }}))
 
-## STEP 4 — Record
+## STEP 3 — Record
 
 Write a summary signal to Farga:
 - source: "guilhem-sre-dispatch"
 - content: "Dispatched SRE alerts to: <list>. Anomalies: <brief summary>. Timestamp: <now>"
 "###,
+        anomalies = anomaly_list,
         constraint = guilhem_dispatch_constraint(fondament_path),
     )
 }
@@ -489,7 +441,10 @@ Today's date is available via `date` in Bash.
 
 // ── Dream — nightly consolidation ─────────────────────────────────────────────
 
-/// POST /trigger/dream — CronJob-triggered daily (03:00 UTC).
+/// Self-paced daily (03:00 UTC) via the tick-poller (Task 2/6) publishing a
+/// `PerceivedMessage::Tick { skill: "dream" }` on this component's tick
+/// subject, perceived by chat_loop::run_tick_stream and routed here directly
+/// -- no HTTP trigger anymore.
 ///
 /// Four-phase session (see build_dream_prompt for the full text):
 /// 1. GATHER — read Farga signals (past 24h) + GitHub state across all repos
@@ -500,22 +455,6 @@ Today's date is available via `date` in Bash.
 ///    against Class 1-4, write dream-adversarial signals that run_dispatch
 ///    (1h later) picks up and routes autonomously (Class 1/2) or defers to
 ///    Pierre-Luc (Class 3/4)
-pub(crate) async fn handle_dream(
-    State(state): State<Arc<ListenState>>,
-    Json(req): Json<TriggerReq>,
-) -> StatusCode {
-    tracing::info!("dream trigger received: {}", req.reason);
-
-    tokio::spawn(async move {
-        match run_dream(&state).await {
-            Ok(_) => tracing::info!("dream complete"),
-            Err(e) => tracing::error!("dream failed: {}", e),
-        }
-    });
-
-    StatusCode::ACCEPTED
-}
-
 pub(crate) async fn run_dream(state: &ListenState) -> anyhow::Result<()> {
     // Was farga-only until 2026-07-04: the dream prompt (build_dream_prompt,
     // Phase 4) instructs Guilhem to dispatch via nervi_publish, but the nervi

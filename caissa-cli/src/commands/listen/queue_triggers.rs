@@ -373,7 +373,10 @@ to the right agent. The agent orchestrates; you review and approve.
 
 // ── Mission pulse ─────────────────────────────────────────────────────────────
 //
-// POST /trigger/mission-pulse — weekly CronJob (Monday 05:00 UTC).
+// Self-paced weekly (Monday 05:00 UTC) via the tick-poller (Task 2/6)
+// publishing a `PerceivedMessage::Tick { skill: "mission-pulse" }` on this
+// component's tick subject, perceived by chat_loop::run_tick_stream and
+// routed here directly -- no HTTP trigger anymore.
 //
 // Guilhem reads the stack trajectory, manages GitHub Initiatives (stack-level goals)
 // and Epics (component-level missions). For each Initiative without Epics, he
@@ -387,22 +390,6 @@ to the right agent. The agent orchestrates; you review and approve.
 //   epic       — component-level mission, owned by component agent
 //   story      — work package, owned by component agent (created when adopting an Epic)
 //   task       — executable order, dispatched to specialist agents
-
-pub(crate) async fn handle_mission_pulse(
-    State(state): State<Arc<ListenState>>,
-    Json(req): Json<TriggerReq>,
-) -> StatusCode {
-    tracing::info!("mission-pulse trigger received: {}", req.reason);
-
-    tokio::spawn(async move {
-        match run_mission_pulse(&state).await {
-            Ok(_) => tracing::info!("mission-pulse complete"),
-            Err(e) => tracing::error!("mission-pulse failed: {}", e),
-        }
-    });
-
-    StatusCode::ACCEPTED
-}
 
 pub(crate) async fn run_mission_pulse(state: &ListenState) -> anyhow::Result<()> {
     let mcp_config = serde_json::to_string(&serde_json::json!({
