@@ -59,8 +59,8 @@ pub(crate) async fn handle_handoff(state: &Arc<ListenState>, req: &MatrixReplyRe
     }
 
     // O-2: dispatch via the dispatcher MCP (plain JSON-RPC over HTTP).
-    let job_id = match dispatch_handoff(state, &session_id, &handoff).await {
-        Ok(id) => id,
+    let (job_id, assignment_id) = match dispatch_handoff(state, &session_id, &handoff).await {
+        Ok(ids) => ids,
         Err(e) => {
             tracing::error!("handoff dispatch failed for {}: {}", session_id, e);
             let _ = write_handoff_error(state, &session_id, "(none)", &format!("dispatch failed: {}", e)).await;
@@ -77,8 +77,9 @@ pub(crate) async fn handle_handoff(state: &Arc<ListenState>, req: &MatrixReplyRe
     let room_id = req.room_id.clone();
     let job_bg = job_id.clone();
     let session_bg = session_id.clone();
+    let assignment_bg = assignment_id.clone();
     tokio::spawn(async move {
-        poll_and_report_handoff(&state_bg, &room_id, &job_bg, &session_bg).await;
+        poll_and_report_handoff(&state_bg, &room_id, &job_bg, &session_bg, &assignment_bg).await;
     });
 
     format!("Dispatch lancé — job_id: `{}`, session: `{}`", job_id, session_id)
@@ -121,7 +122,9 @@ pub(crate) async fn write_handoff_error(
     post_signal_to(state, session_id, &err.to_string(), "guilhem-handoff-error").await
 }
 
-/// O-2: call the dispatcher's `invoke_agent` and return the job_id. Optional
+/// O-2: call the dispatcher's `invoke_agent` and return (job_id, assignment_id).
+/// The assignment_id identifies the Nervi reply queue that `get_agent_result`
+/// now reads from — the caller must thread it through to the poller. Optional
 /// handoff fields map to the dispatcher's arguments: `allowed_tools` passes
 /// through verbatim; `context_ref` / `farga_project` are folded into the
 /// pre-assembled `context` markdown the agent boots with.
@@ -129,7 +132,7 @@ pub(crate) async fn dispatch_handoff(
     state: &ListenState,
     session_id: &str,
     h: &HandoffRequest,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<(String, String)> {
     let mut arguments = serde_json::json!({
         "domain": h.domain,
         "facet": h.facet,
@@ -145,8 +148,11 @@ pub(crate) async fn dispatch_handoff(
     }
 
     let text = dispatcher_tool_call(state, "invoke_agent", arguments).await?;
-    parse_job_id(&text)
-        .ok_or_else(|| anyhow::anyhow!("dispatcher returned no job_id (raw: {})", text))
+    let job_id = parse_job_id(&text)
+        .ok_or_else(|| anyhow::anyhow!("dispatcher returned no job_id (raw: {})", text))?;
+    let assignment_id = parse_assignment_id(&text)
+        .ok_or_else(|| anyhow::anyhow!("dispatcher returned no assignment_id (raw: {})", text))?;
+    Ok((job_id, assignment_id))
 }
 
 /// Build the `context` markdown for invoke_agent from the optional handoff
@@ -176,6 +182,7 @@ pub(crate) async fn poll_and_report_handoff(
     room_id: &str,
     job_id: &str,
     session_id: &str,
+    assignment_id: &str,
 ) {
     let start = std::time::Instant::now();
     let mut backoff = HANDOFF_POLL_INITIAL;
@@ -184,7 +191,7 @@ pub(crate) async fn poll_and_report_handoff(
         tokio::time::sleep(backoff).await;
         backoff = std::cmp::min(backoff.mul_f32(1.6), HANDOFF_POLL_MAX);
 
-        let args = serde_json::json!({ "job_id": job_id, "session_id": session_id });
+        let args = serde_json::json!({ "job_id": job_id, "assignment_id": assignment_id });
         match dispatcher_tool_call(state, "get_agent_result", args).await {
             Ok(text) => match classify_job_status(&text) {
                 JobStatus::Completed(summary) => {
@@ -201,8 +208,8 @@ pub(crate) async fn poll_and_report_handoff(
                 JobStatus::Failed(reason) => {
                     let _ = write_handoff_error(state, session_id, job_id, &reason).await;
                     let msg = format!(
-                        "✗ Job `{}` échec — {} — reprise : `mcp__dispatcher__get_agent_result job_id:{} session_id:{}`",
-                        job_id, reason, job_id, session_id
+                        "✗ Job `{}` échec — {} — reprise : `mcp__dispatcher__get_agent_result job_id:{} assignment_id:{}`",
+                        job_id, reason, job_id, assignment_id
                     );
                     post_to_matrix_room(room_id, &msg).await;
                     return;
@@ -217,8 +224,8 @@ pub(crate) async fn poll_and_report_handoff(
         if start.elapsed() >= HANDOFF_TIMEOUT {
             let _ = write_handoff_error(state, session_id, job_id, "timeout (10 min)").await;
             let msg = format!(
-                "Job `{}` timeout — reprise : `mcp__dispatcher__get_agent_result job_id:{} session_id:{}`",
-                job_id, job_id, session_id
+                "Job `{}` timeout — reprise : `mcp__dispatcher__get_agent_result job_id:{} assignment_id:{}`",
+                job_id, job_id, assignment_id
             );
             post_to_matrix_room(room_id, &msg).await;
             return;
@@ -269,6 +276,13 @@ pub(crate) fn parse_job_id(text: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+/// Extract the `assignment_id:` value from invoke_agent's text result.
+pub(crate) fn parse_assignment_id(text: &str) -> Option<String> {
+    text.lines()
+        .find_map(|line| line.trim().strip_prefix("assignment_id:").map(|v| v.trim().to_string()))
+        .filter(|s| !s.is_empty())
+}
+
 /// Map a `get_agent_result` reply to a [`JobStatus`]. The dispatcher prefixes
 /// its reply with `status: completed|failed|running|pending`.
 pub(crate) fn classify_job_status(text: &str) -> JobStatus {
@@ -309,7 +323,7 @@ mod handoff_helper_tests {
 
     #[test]
     fn parse_job_id_extracts_from_dispatcher_text() {
-        let text = "Agent job dispatched.\njob_id: agent-gardian-developer-ab12cd34\nsession_id: handoff-gardian-developer-ab12cd34\n\nPoll with get_agent_result(...).";
+        let text = "Agent job dispatched.\njob_id: agent-gardian-developer-ab12cd34\nsession_id: handoff-gardian-developer-ab12cd34\nassignment_id: assign-ab12cd34ef56\n\nPoll with get_agent_result(...).";
         assert_eq!(
             parse_job_id(text).as_deref(),
             Some("agent-gardian-developer-ab12cd34")
@@ -319,6 +333,20 @@ mod handoff_helper_tests {
     #[test]
     fn parse_job_id_none_when_absent() {
         assert_eq!(parse_job_id("no id here\nsession_id: x"), None);
+    }
+
+    #[test]
+    fn parse_assignment_id_extracts_from_dispatcher_text() {
+        let text = "Agent job dispatched.\njob_id: agent-gardian-developer-ab12cd34\nsession_id: handoff-gardian-developer-ab12cd34\nassignment_id: assign-ab12cd34ef56\n\nPoll with get_agent_result(...).";
+        assert_eq!(
+            parse_assignment_id(text).as_deref(),
+            Some("assign-ab12cd34ef56")
+        );
+    }
+
+    #[test]
+    fn parse_assignment_id_none_when_absent() {
+        assert_eq!(parse_assignment_id("no id here\nsession_id: x"), None);
     }
 
     #[test]
