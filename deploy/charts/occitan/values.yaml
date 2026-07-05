@@ -49,7 +49,7 @@ corrier:
 # ─── Charradissa ─────────────────────────────────────────────────────────────
 charradissa:
   image: ghcr.io/miegjorn/charradissa
-  imageTag: sha-34d84df # CI writes sha-<sha> here on every main push
+  imageTag: sha-1eabee3 # CI writes sha-<sha> here on every main push
   replicas: 1
   port: 8448
   # Matrix room ID for the shared approval room. Agents publish to
