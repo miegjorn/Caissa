@@ -68,7 +68,34 @@ yours alone — it does not appear in output.\n\
         ""
     };
 
-    let context_graph_preamble = "\
+    let context_graph_preamble = context_graph_preamble();
+
+    let skill_constraints = resolve_skill_constraints(fondament_url, &skills).await;
+
+    let prompt = format!(
+        "{}\n\n{}\n\n{}\n\n{}\n\nYou are replying in Matrix room {}.",
+        discipline_preamble,
+        role_context.trim_end(),
+        context_graph_preamble,
+        skill_constraints,
+        room_id,
+    );
+    (prompt, skills, models, is_aporia, thinking_budget)
+}
+
+/// The two real dispatcher scope rules, stated accurately for every agent's
+/// prompt: Guilhem may invoke any domain's `architect` or `axiom-evaluator`
+/// facet only (cross-domain, consultative/evaluative work); component
+/// agents may invoke any facet within their own domain only (self-domain).
+/// Both are enforced by `caissa-cli/src/commands/dispatch.rs::ScopeRules`,
+/// loaded from `caissa/scope-org-orchestrator` and
+/// `caissa/scope-component-orchestrator` respectively — this text
+/// previously claimed only the first rule existed and that any other
+/// combination was rejected outright, which left every component agent's
+/// own prompt self-contradicting its own attached
+/// `caissa/scope-component-orchestrator` skill content.
+fn context_graph_preamble() -> &'static str {
+    "\
 --- context graph ---\n\
 You have access to Farga's role-scoped context graph via:\n\
   mcp__farga__list_context_nodes (project: \"occitan\", role: \"org\")\n\
@@ -82,22 +109,13 @@ read its context node before acting. Key nodes:\n\
 \n\
 On your FIRST message in this session, call list_context_nodes to orient yourself.\n\
 \n\
-DISPATCH RULE: invoke_agent requires caller=\"guilhem\" and facet=\"architect\" only.\n\
-For all code work, use nervi_publish to occitan.dispatch.<component>.\n\
-The dispatcher will reject any other combination — this is a hard guard, not a suggestion.\n\
---- end context graph ---";
-
-    let skill_constraints = resolve_skill_constraints(fondament_url, &skills).await;
-
-    let prompt = format!(
-        "{}\n\n{}\n\n{}\n\n{}\n\nYou are replying in Matrix room {}.",
-        discipline_preamble,
-        role_context.trim_end(),
-        context_graph_preamble,
-        skill_constraints,
-        room_id,
-    );
-    (prompt, skills, models, is_aporia, thinking_budget)
+DISPATCH RULE: Guilhem may invoke_agent for any domain's \"architect\" or\n\
+\"axiom-evaluator\" facet only (cross-domain, consultative/evaluative work).\n\
+Component agents may invoke_agent for any facet within their own domain only\n\
+(self-domain). For all cross-component code work, use nervi_publish to\n\
+occitan.dispatch.<component> instead. The dispatcher enforces both rules —\n\
+this is a hard guard, not a suggestion.\n\
+--- end context graph ---"
 }
 
 /// Fetch each declared skill's `rules.prompt_constraint` text from
@@ -312,5 +330,15 @@ mod skill_resolution_tests {
     async fn resolve_skill_constraints_with_no_skills_returns_empty() {
         let result = resolve_skill_constraints("http://127.0.0.1:1", &[]).await;
         assert_eq!(result, "");
+    }
+
+    #[test]
+    fn context_graph_preamble_states_both_real_dispatch_rules() {
+        let text = context_graph_preamble();
+        assert!(text.contains("architect"));
+        assert!(text.contains("axiom-evaluator"));
+        assert!(text.contains("own domain only"));
+        assert!(!text.contains("requires caller=\"guilhem\" and facet=\"architect\" only"));
+        assert!(!text.contains("The dispatcher will reject any other combination"));
     }
 }
