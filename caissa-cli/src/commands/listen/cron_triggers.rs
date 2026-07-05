@@ -685,3 +685,118 @@ Do not just narrate what you did. Chronicle what the stack is becoming.
         constraint = guilhem_dispatch_constraint(fondament_path),
     )
 }
+
+// ── Farcaster — cross-component pattern detection ─────────────────────────────
+
+/// Self-paced periodic skill (see corrier_core's schedule_tick convention,
+/// armed via a PUT to {farga_url}/kv/schedule/guilhem__farcaster). Reads
+/// recent signals across every known project, looks for the cross-component
+/// pattern occitan/amassada's "Cross-X" section describes, and for anything
+/// worth sharing, dispatches via nervi_publish or writes a Farga signal --
+/// the same delivery convention every other Guilhem skill already uses, not
+/// a new mechanism.
+pub(crate) async fn run_farcaster(state: &ListenState) -> anyhow::Result<()> {
+    let mcp_config = serde_json::to_string(&serde_json::json!({
+        "mcpServers": agent_mcp_servers(state)
+    }))?;
+    let mcp_path = std::env::temp_dir().join("guilhem-farcaster-mcp.json");
+    std::fs::write(&mcp_path, &mcp_config)?;
+
+    let prompt = build_farcaster_prompt(&state.fondament_path, &state.farga_project);
+
+    let output = tokio::process::Command::new("claude")
+        .prefer_oauth_over_api_key()
+        .args([
+            "--print",
+            &prompt,
+            "--model",
+            &state.dream_model,
+            "--mcp-config",
+            mcp_path.to_str().unwrap(),
+            "--allowed-tools",
+            "Bash,mcp__farga__search_signals,mcp__farga__read_context,mcp__farga__write_signal,mcp__farga__list_projects,mcp__nervi__nervi_publish,mcp__nervi__nervi_subscribe",
+        ])
+        .env("FARGA_URL", &state.farga_url)
+        .env("FARGA_PROJECT", &state.farga_project)
+        .envs(github_token_envs())
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("farcaster claude exited with error: {}", stderr);
+    }
+
+    let report = String::from_utf8_lossy(&output.stdout).to_string();
+
+    if report.trim().is_empty() {
+        tracing::warn!("farcaster: empty output from claude");
+        return Ok(());
+    }
+
+    tracing::info!("farcaster: cross-component pass complete");
+    Ok(())
+}
+
+pub(crate) fn build_farcaster_prompt(fondament_path: &str, project: &str) -> String {
+    format!(
+        r###"You are Guilhem de Tudela, org agent for the Occitan stack. This is your
+self-paced Farcaster tick -- a cross-component pattern-detection pass, per
+your occitan/amassada skill's "Cross-X" section.
+
+{constraint}
+
+## STEP 1 — Gather
+
+List all known projects: mcp__farga__list_projects. For each, read recent
+signals: mcp__farga__search_signals (project: "<project>", since: last 6
+hours or your last farcaster run, whichever you can determine -- if unsure,
+use the last 6 hours as a safe default).
+
+## STEP 2 — Look for cross-component patterns
+
+At your level (component owner across all 8: Gardian, Fondament, Farga,
+Amassada, Charradissa, Cor, Caissa, Nervi), "sibling" means these 8
+components. Look specifically for:
+- A pattern repeating across more than one component's recent signals
+- A lesson one component already learned (a fix, a workaround) that another
+  is about to relearn independently
+- A connection between two components' recent activity that isn't visible
+  from inside either one alone
+
+Do not just summarize what you read -- that is chronicle's job, not this
+one. Only what a single-component view would have missed counts here.
+
+## STEP 3 — Propagate, if warranted
+
+For each finding worth sharing:
+- If it's actionable now for a specific component: nervi_publish(subject=
+  "occitan.dispatch.<component>", payload=JSON.stringify({{"type":"cross-
+  component-note","task":"<what to check or apply>","dispatched_by":
+  "guilhem-farcaster","class":1}}))
+- If it's context for later, not an instruction: mcp__farga__write_signal
+  (project: "{project}", source: "guilhem-farcaster", content: "<the
+  finding, and why it matters across components>")
+
+Not every pass finds something. If nothing crosses the bar this run, write
+one brief Farga signal saying so (source: "guilhem-farcaster", content:
+"cross-component pass: no findings this cycle") and stop -- do not force a
+finding to justify the tick.
+
+## STEP 4 — Re-arm your own next tick
+
+Near the end of this run, PUT your next scheduled wake to Farga's KV store:
+
+curl -X PUT {{farga_url}}/kv/schedule/guilhem__farcaster \
+  -H "Content-Type: application/json" \
+  -d '{{"value": {{"next_due": "<ISO8601 UTC, your own judgment -- default
+  roughly 6 hours out if nothing suggests otherwise>", "note": "<one line on
+  why this interval>"}}, "ttl_seconds": 2592000}}'
+
+Use the actual {{farga_url}} value from your own environment (FARGA_URL),
+not the literal string above.
+"###,
+        constraint = guilhem_dispatch_constraint(fondament_path),
+        project = project,
+    )
+}
