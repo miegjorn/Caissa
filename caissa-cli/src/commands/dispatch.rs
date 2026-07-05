@@ -5,7 +5,7 @@
 //!
 //! MCP tools:
 //!   invoke_agent      — create a k8s Job for a domain/facet agent
-//!   get_agent_result  — check Job status and read result from Farga
+//!   get_agent_result  — check Job status and read the assignment's Nervi reply
 //!   list_agent_specs  — list known domain/facet combinations
 
 use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
@@ -144,6 +144,7 @@ struct DispatchState {
     farga_url: String,
     farga_mcp_url: String,
     scope_rules: Arc<ScopeRules>,
+    nervi: Arc<nervi_core::NerviClient>,
 }
 
 // ── JSON-RPC 2.0 (shared pattern with Farga MCP) ─────────────────────────────
@@ -237,12 +238,12 @@ fn tool_list() -> Value {
                             "type": "string",
                             "description": "The job_id returned by invoke_agent."
                         },
-                        "session_id": {
+                        "assignment_id": {
                             "type": "string",
-                            "description": "The session_id used when invoking — used to read the result from Farga."
+                            "description": "The assignment_id returned by invoke_agent — used to read the reply from its Nervi queue."
                         }
                     },
-                    "required": ["job_id", "session_id"]
+                    "required": ["job_id", "assignment_id"]
                 }
             },
             {
@@ -320,6 +321,9 @@ async fn call_tool(state: &DispatchState, name: &str, args: &Value) -> anyhow::R
             );
             state.scope_rules.validate(caller, &domain, &facet)?;
 
+            let assignment_id = format!("assign-{}", &uuid::Uuid::new_v4().to_string()[..12]);
+            let (_request_subject, reply_subject) = corrier_core::mint_assignment_subjects(&assignment_id);
+
             let job_id = create_agent_job(
                 &state.k8s,
                 &domain,
@@ -333,23 +337,25 @@ async fn call_tool(state: &DispatchState, name: &str, args: &Value) -> anyhow::R
                 &state.agents_namespace,
                 &state.farga_url,
                 &state.farga_mcp_url,
+                &reply_subject,
             )
             .await?;
 
-            tracing::info!("spawned agent job: {} ({}/{})", job_id, domain, facet);
+            tracing::info!("spawned agent job: {} ({}/{}), assignment {}", job_id, domain, facet, assignment_id);
             Ok(text_result(format!(
-                "Agent job dispatched.\njob_id: {}\nsession_id: {}\n\nPoll with get_agent_result(job_id=\"{}\", session_id=\"{}\") to check status.",
-                job_id, session_id, job_id, session_id
+                "Agent job dispatched.\njob_id: {}\nsession_id: {}\nassignment_id: {}\n\nPoll with get_agent_result(job_id=\"{}\", assignment_id=\"{}\") to check status.",
+                job_id, session_id, assignment_id, job_id, assignment_id
             )))
         }
 
         "get_agent_result" => {
             let job_id = args["job_id"].as_str().unwrap_or("").to_string();
-            let session_id = args["session_id"].as_str().unwrap_or("").to_string();
+            let assignment_id = args["assignment_id"].as_str().unwrap_or("").to_string();
             anyhow::ensure!(!job_id.is_empty(), "job_id is required");
-            anyhow::ensure!(!session_id.is_empty(), "session_id is required");
+            anyhow::ensure!(!assignment_id.is_empty(), "assignment_id is required");
 
-            let result = check_job_result(&state.k8s, &state.farga_url, &state.agents_namespace, &job_id, &session_id).await?;
+            let (_request_subject, reply_subject) = corrier_core::mint_assignment_subjects(&assignment_id);
+            let result = check_assignment_result(&state.nervi, &state.k8s, &state.agents_namespace, &job_id, &reply_subject).await?;
             Ok(text_result(result))
         }
 
@@ -377,6 +383,7 @@ async fn create_agent_job(
     namespace: &str,
     farga_url: &str,
     farga_mcp_url: &str,
+    reply_subject: &str,
 ) -> anyhow::Result<String> {
     let short_id = &uuid::Uuid::new_v4().to_string()[..8];
     let job_name = format!("agent-{}-{}-{}", domain, facet, short_id);
@@ -391,6 +398,8 @@ async fn create_agent_job(
         env_val("FARGA_URL", farga_url),
         env_val("FARGA_MCP_URL", farga_mcp_url),
         env_val("MODEL", model),
+        env_val("ASSIGNMENT_REPLY_SUBJECT", reply_subject),
+        env_val("NATS_URL", "nats://nervi-nats.occitan-system.svc.cluster.local:4222"),
         // ANTHROPIC_API_KEY from the cluster secret (for claude* models)
         EnvVar {
             name: "ANTHROPIC_API_KEY".into(),
@@ -697,54 +706,55 @@ mod tests {
         assert_eq!(secret_ref.name.as_deref(), Some("openbao"));
         assert_eq!(secret_ref.key, "token");
     }
+
+    #[test]
+    fn build_job_env_includes_assignment_reply_subject() {
+        let env = vec![
+            env_val("DOMAIN", "farga"),
+            env_val("ASSIGNMENT_REPLY_SUBJECT", "occitan.assignment.assign-abc123.reply"),
+        ];
+        let job = build_job(
+            "agent-farga-developer-abc123",
+            "farga",
+            "developer",
+            "session-1",
+            "agents",
+            "ghcr.io/miegjorn/caissa-sandbox:guilhem",
+            env,
+        );
+        let container = &job.spec.unwrap().template.spec.unwrap().containers[0];
+        let env = container.env.as_ref().unwrap();
+        let subject_env = env.iter().find(|e| e.name == "ASSIGNMENT_REPLY_SUBJECT").expect("must be set");
+        assert_eq!(subject_env.value.as_deref(), Some("occitan.assignment.assign-abc123.reply"));
+    }
 }
 
-// ── Job result polling ────────────────────────────────────────────────────────
+// ── Assignment result read ────────────────────────────────────────────────────
 
-async fn check_job_result(
+async fn check_assignment_result(
+    nervi: &nervi_core::NerviClient,
     client: &Client,
-    farga_url: &str,
     namespace: &str,
     job_id: &str,
-    session_id: &str,
+    reply_subject: &str,
 ) -> anyhow::Result<String> {
-    let api: Api<Job> = Api::namespaced(client.clone(), namespace);
+    let messages = nervi.subscribe(reply_subject, 1).await?;
+    if let Some(msg) = messages.into_iter().next() {
+        return Ok(format!("status: completed\n\n{}", msg.payload));
+    }
 
+    // No reply yet -- fall back to Job status for a pending/running/failed signal.
+    let api: Api<Job> = Api::namespaced(client.clone(), namespace);
     let job = api.get(job_id).await
         .map_err(|e| anyhow::anyhow!("k8s job get failed ({}): {}", job_id, e))?;
-
     let status = job.status.unwrap_or_default();
-    let succeeded = status.succeeded.unwrap_or(0);
-    let failed = status.failed.unwrap_or(0);
-    let active = status.active.unwrap_or(0);
-
-    if succeeded > 0 {
-        // Job done — read result from Farga
-        let signals = fetch_signals(farga_url, session_id).await?;
-        Ok(format!("status: completed\n\n{}", signals))
-    } else if failed > 0 {
+    if status.failed.unwrap_or(0) > 0 {
         Ok(format!("status: failed (check pod logs: kubectl logs -n {} -l job-name={})", namespace, job_id))
-    } else if active > 0 {
+    } else if status.active.unwrap_or(0) > 0 {
         Ok("status: running".into())
     } else {
         Ok("status: pending".into())
     }
-}
-
-async fn fetch_signals(farga_url: &str, project: &str) -> anyhow::Result<String> {
-    let url = format!("{}/signals/recent?project={}", farga_url, project);
-    let resp = reqwest::get(&url).await?;
-    if !resp.status().is_success() {
-        return Ok(format!("(no signals found for session {})", project));
-    }
-    let signals: Vec<serde_json::Value> = resp.json().await.unwrap_or_default();
-    if signals.is_empty() {
-        return Ok(format!("(no signals yet for session {})", project));
-    }
-    Ok(signals.iter()
-        .filter_map(|s| s["content"].as_str())
-        .collect::<Vec<_>>()
-        .join("\n\n---\n\n"))
 }
 
 // ── Agent spec catalog ────────────────────────────────────────────────────────
@@ -867,9 +877,13 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         .unwrap_or_else(|_| "http://farga.occitan-system.svc.cluster.local:7500/mcp".into());
     let fondament_url = std::env::var("FONDAMENT_URL")
         .unwrap_or_else(|_| "http://fondament.occitan-system.svc.cluster.local:7800".into());
+    let nats_url = std::env::var("NATS_URL")
+        .unwrap_or_else(|_| "nats://nervi-nats.occitan-system.svc.cluster.local:4222".into());
 
     let k8s = Client::try_default().await
         .map_err(|e| anyhow::anyhow!("k8s client init failed: {}", e))?;
+    let nervi = nervi_core::NerviClient::connect(&nats_url).await
+        .map_err(|e| anyhow::anyhow!("nervi client init failed: {}", e))?;
 
     let scope_rules = Arc::new(load_scope_rules(&fondament_url).await);
 
@@ -878,6 +892,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
     tracing::info!("agents namespace: {}", agents_namespace);
     tracing::info!("farga: {}", farga_url);
     tracing::info!("fondament: {}", fondament_url);
+    tracing::info!("nats: {}", nats_url);
 
     let state = DispatchState {
         k8s: Arc::new(k8s),
@@ -886,6 +901,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         farga_url,
         farga_mcp_url,
         scope_rules,
+        nervi: Arc::new(nervi),
     };
 
     let app = Router::new()
