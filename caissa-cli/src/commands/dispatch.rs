@@ -203,7 +203,7 @@ fn tool_list() -> Value {
                         },
                         "facet": {
                             "type": "string",
-                            "description": "Role facet: architect | cloud-architect | aws-architect | azure-architect | gcp-architect | intake-architect | developer | qa | infra | db | security | reviewer | analyst | writer | librarian | axiom-evaluator | tech-moderator | project-moderator | meditation-moderator | review-moderator"
+                            "description": "Role facet: architect | cloud-architect | aws-architect | azure-architect | gcp-architect | intake-architect | developer | qa | infra | db | security | reviewer | analyst | writer | librarian | axiom-evaluator | tech-moderator | project-moderator | review-moderator"
                         },
                         "task": {
                             "type": "string",
@@ -211,7 +211,7 @@ fn tool_list() -> Value {
                         },
                         "context": {
                             "type": "string",
-                            "description": "Pre-assembled domain+facet context markdown. Written to /workspace/CLAUDE.md before the agent runs. Load from /fondament/domains/<domain>.yaml for domain context. For facet context, the filename does NOT match the facet keyword — use this mapping: architect->app-architect.yaml, cloud-architect->cloud-architect.yaml, aws-architect->aws-architect.yaml, azure-architect->azure-architect.yaml, gcp-architect->gcp-architect.yaml, intake-architect->intake-architect.yaml, developer->developer.yaml, infra->infra-engineer.yaml, qa->qa-engineer.yaml, security->security-analyst.yaml, db->data-architect.yaml, reviewer->code-reviewer.yaml, analyst->business-analyst.yaml, writer->technical-writer.yaml, librarian->librarian.yaml, axiom-evaluator->axiom-evaluator.yaml, tech-moderator->tech-moderator.yaml, project-moderator->project-moderator.yaml, meditation-moderator->meditation-moderator.yaml, review-moderator->review-moderator.yaml. Read /fondament/roles/<mapped-filename> in your session."
+                            "description": "Pre-assembled domain+facet context markdown. Written to /workspace/CLAUDE.md before the agent runs. Load from /fondament/domains/<domain>.yaml for domain context. For facet context, the filename does NOT match the facet keyword — use this mapping: architect->app-architect.yaml, cloud-architect->cloud-architect.yaml, aws-architect->aws-architect.yaml, azure-architect->azure-architect.yaml, gcp-architect->gcp-architect.yaml, intake-architect->intake-architect.yaml, developer->developer.yaml, infra->infra-engineer.yaml, qa->qa-engineer.yaml, security->security-analyst.yaml, db->data-architect.yaml, reviewer->code-reviewer.yaml, analyst->business-analyst.yaml, writer->technical-writer.yaml, librarian->librarian.yaml, axiom-evaluator->axiom-evaluator.yaml, tech-moderator->tech-moderator.yaml, project-moderator->project-moderator.yaml, review-moderator->review-moderator.yaml. Read /fondament/roles/<mapped-filename> in your session."
                         },
                         "allowed_tools": {
                             "type": "string",
@@ -753,6 +753,29 @@ mod tests {
         let nervi_env = env.iter().find(|e| e.name == "NERVI_MCP_URL").expect("must be set");
         assert_eq!(nervi_env.value.as_deref(), Some("http://nervi.occitan-system.svc.cluster.local:8080/mcp"));
     }
+
+    #[test]
+    fn tool_list_no_longer_offers_the_retired_meditation_moderator_facet() {
+        let tools = tool_list();
+        let facet_desc = tools["tools"][0]["inputSchema"]["properties"]["facet"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(!facet_desc.contains("meditation-moderator"));
+        assert!(facet_desc.contains("axiom-evaluator"));
+
+        let context_desc = tools["tools"][0]["inputSchema"]["properties"]["context"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(!context_desc.contains("meditation-moderator"));
+        assert!(context_desc.contains("axiom-evaluator->axiom-evaluator.yaml"));
+    }
+
+    #[test]
+    fn list_specs_no_longer_lists_the_retired_meditation_moderator_facet() {
+        let specs = list_specs();
+        assert!(!specs.contains("meditation-moderator"));
+        assert!(specs.contains("axiom-evaluator"));
+    }
 }
 
 // ── Assignment result read ────────────────────────────────────────────────────
@@ -797,7 +820,7 @@ fn list_specs() -> String {
         // knowledge / docs
         "analyst", "writer", "librarian",
         // moderators
-        "tech-moderator", "project-moderator", "meditation-moderator", "review-moderator",
+        "tech-moderator", "project-moderator", "review-moderator",
     ];
 
     let mut lines = vec!["Available domain/facet combinations:\n".to_string()];
@@ -816,7 +839,7 @@ fn list_specs() -> String {
          reviewer->code-reviewer.yaml, axiom-evaluator->axiom-evaluator.yaml,\n\
          analyst->business-analyst.yaml, writer->technical-writer.yaml, librarian->librarian.yaml,\n\
          tech-moderator->tech-moderator.yaml, project-moderator->project-moderator.yaml,\n\
-         meditation-moderator->meditation-moderator.yaml, review-moderator->review-moderator.yaml.\n\
+         review-moderator->review-moderator.yaml.\n\
          \n\
          Load domain context from /fondament/domains/<domain>.yaml.\n\
          Read the facet file's tools.always_on list and pass it as invoke_agent's\n\
