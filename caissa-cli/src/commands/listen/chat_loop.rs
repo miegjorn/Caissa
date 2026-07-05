@@ -158,6 +158,14 @@ async fn handle_dispatch_order(
     dispatched_by: &str,
     risk_class: u8,
 ) -> anyhow::Result<()> {
+    if !accepts_dispatch_from(&state.fondament_url, dispatched_by).await {
+        tracing::warn!(
+            "dispatch order from '{}' rejected: not in {}'s accept_dispatch_from list",
+            dispatched_by, state.component_name
+        );
+        return Ok(()); // drop silently -- matches ScopeRules::validate's existing reject-not-crash contract
+    }
+
     let (system_prompt, _skills, _models, _is_aporia, _budget) =
         crate::commands::listen::resolve_agent_prompt(&state.fondament_url, &state.generation, "dispatch").await;
     let content = format!(
@@ -166,6 +174,57 @@ async fn handle_dispatch_order(
     );
     crate::commands::listen::run_single_turn(state, &system_prompt, &content).await?;
     Ok(())
+}
+
+/// Self-enforced access check, reading the same skill-YAML convention
+/// dispatch.rs::load_scope_rules already fetches for invoke_agent's own
+/// gate -- relocated here from "a central gate upstream of delivery" (there
+/// is none) into "the receiving agent's own perceive-loop honors its
+/// declared rule", per the spec's rejection of a runtime broker.
+async fn accepts_dispatch_from(fondament_url: &str, dispatched_by: &str) -> bool {
+    #[derive(serde::Deserialize, Default)]
+    struct PerceiveRules {
+        #[serde(default)]
+        accept_dispatch_from: Vec<String>,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct RulesBlock {
+        perceive: Option<PerceiveRules>,
+    }
+    #[derive(serde::Deserialize)]
+    struct SkillFile {
+        #[serde(default)]
+        rules: Option<RulesBlock>,
+    }
+
+    let url = format!("{}/raw/caissa/scope-component-orchestrator@latest", fondament_url.trim_end_matches('/'));
+    let result = reqwest::Client::new()
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await;
+
+    match result {
+        Ok(resp) if resp.status().is_success() => match resp.text().await {
+            Ok(text) => match serde_yaml::from_str::<SkillFile>(&text) {
+                Ok(skill) => {
+                    let allowed = skill.rules.and_then(|r| r.perceive).map(|p| p.accept_dispatch_from);
+                    match allowed {
+                        Some(list) => list.iter().any(|c| c == dispatched_by),
+                        // No perceive rule declared at all -- fail open for
+                        // guilhem specifically (org orchestrator, matches
+                        // ScopeRules::validate's existing "guilhem with no
+                        // loaded rules: no restrictions" fallback), reject
+                        // everyone else.
+                        None => dispatched_by == "guilhem",
+                    }
+                }
+                Err(_) => dispatched_by == "guilhem",
+            },
+            Err(_) => dispatched_by == "guilhem",
+        },
+        _ => dispatched_by == "guilhem",
+    }
 }
 
 /// Perceives this component's self-scheduled periodic-skill ticks
