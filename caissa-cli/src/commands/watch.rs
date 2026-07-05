@@ -316,13 +316,17 @@ async fn publish_sre_alert(
             "name": "nervi_publish",
             "arguments": {
                 "subject": "occitan.sre.alerts",
+                "qualifier": "info",
                 "payload": alert_payload.to_string()
             }
         }
     });
 
-    // Nervi MCP uses streamable-http (SSE response). We fire-and-forget:
-    // send the request and consume enough of the response to release the connection.
+    // Nervi MCP uses streamable-http (SSE response). HTTP 200 is NOT sufficient
+    // to know the publish succeeded -- nervi-mcp returns 200 even when the
+    // JSON-RPC payload inside the SSE `data:` line carries `isError: true`
+    // (e.g. a tool-input validation failure). We have to read the body and
+    // classify it, not just check the status code.
     let resp = client
         .post(nervi_mcp_url)
         .header("Content-Type", "application/json")
@@ -336,8 +340,114 @@ async fn publish_sre_alert(
         anyhow::bail!("nervi MCP returned {}", status);
     }
 
+    let body = resp.text().await?;
+    if let Err(e) = check_nervi_publish_response(&body) {
+        anyhow::bail!("nervi MCP rejected occitan.sre.alerts publish: {}", e);
+    }
+
     tracing::info!("published {} anomaly(-ies) to occitan.sre.alerts", anomalies.len());
     Ok(())
+}
+
+/// Classify a raw Nervi MCP `tools/call` HTTP response body as success or
+/// failure. Nervi's streamable-http transport frames each response as SSE:
+/// `event: message\ndata: {<json-rpc response>}\n\n`. HTTP 200 is returned
+/// even for a JSON-RPC-level or tool-input-validation failure, so the body
+/// itself must be parsed and inspected for a top-level `error` field or a
+/// `result.isError == true` (the shape nervi-mcp uses for e.g. a rejected
+/// `nervi_publish` call missing a required argument).
+///
+/// Confirmed live against a real nervi-mcp `nervi_publish` call missing the
+/// required `qualifier` argument, which returns HTTP 200 with body:
+///   event: message
+///   data: {"result":{"content":[{"type":"text","text":"MCP error -32602: ..."}],"isError":true},"jsonrpc":"2.0","id":1}
+///
+/// Returns `Ok(())` on a clean result, `Err(<message>)` on a detected failure.
+/// Pure and network-free so it can be unit-tested with canned SSE bodies.
+fn check_nervi_publish_response(body: &str) -> Result<(), String> {
+    // SSE frames each response as "event: message\ndata: {...}\n\n"; unwrap
+    // the data line (same convention as component_agent.rs::poll_nervi_subject).
+    let json_str = body
+        .lines()
+        .find(|l| l.starts_with("data: "))
+        .map(|l| &l["data: ".len()..])
+        .unwrap_or(body);
+
+    let parsed: serde_json::Value = serde_json::from_str(json_str)
+        .map_err(|e| format!("could not parse nervi MCP response body: {} (body: {})", e, body))?;
+
+    // Top-level JSON-RPC error (e.g. malformed request, unknown method).
+    if let Some(err) = parsed.get("error") {
+        let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("unknown error");
+        return Err(format!("jsonrpc error: {}", msg));
+    }
+
+    // Tool-level error: result.isError == true, with the actual message in
+    // result.content[0].text.
+    let is_error = parsed
+        .get("result")
+        .and_then(|r| r.get("isError"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if is_error {
+        let text = parsed
+            .get("result")
+            .and_then(|r| r.get("content"))
+            .and_then(|c| c.as_array())
+            .and_then(|a| a.first())
+            .and_then(|item| item.get("text"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("(no error text in response)");
+        return Err(text.to_string());
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod check_nervi_publish_response_tests {
+    use super::*;
+
+    /// Captured live against a real nervi-mcp `nervi_publish` call with the
+    /// required `qualifier` argument omitted.
+    fn real_validation_error_response() -> &'static str {
+        "event: message\ndata: {\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"MCP error -32602: Input validation error: Invalid arguments for tool nervi_publish: [\\n  {\\n    \\\"expected\\\": \\\"'info' | 'cross-project' | 'data'\\\",\\n    \\\"received\\\": \\\"undefined\\\",\\n    \\\"code\\\": \\\"invalid_type\\\",\\n    \\\"path\\\": [\\n      \\\"qualifier\\\"\\n    ],\\n    \\\"message\\\": \\\"Required\\\"\\n  }\\n]\"}],\"isError\":true},\"jsonrpc\":\"2.0\",\"id\":1}\n\n"
+    }
+
+    /// Captured live against a real nervi-mcp `nervi_publish` call with a
+    /// valid `qualifier` argument.
+    fn real_success_response() -> &'static str {
+        "event: message\ndata: {\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\n  \\\"published\\\": true,\\n  \\\"subject\\\": \\\"occitan.sre.alerts\\\",\\n  \\\"qualifier\\\": \\\"info\\\",\\n  \\\"stream\\\": \\\"OCCITAN\\\",\\n  \\\"seq\\\": 79\\n}\"}],\"structuredContent\":{\"published\":true,\"subject\":\"occitan.sre.alerts\",\"qualifier\":\"info\",\"stream\":\"OCCITAN\",\"seq\":79}},\"jsonrpc\":\"2.0\",\"id\":1}\n\n"
+    }
+
+    #[test]
+    fn detects_tool_input_validation_error() {
+        let err = check_nervi_publish_response(real_validation_error_response())
+            .expect_err("missing-qualifier response must be classified as a failure");
+        assert!(err.contains("qualifier"), "error message should surface the actual validation failure: {}", err);
+    }
+
+    #[test]
+    fn accepts_real_success_response() {
+        check_nervi_publish_response(real_success_response())
+            .expect("a real successful publish response must not be classified as an error");
+    }
+
+    #[test]
+    fn detects_top_level_jsonrpc_error() {
+        let body = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}\n\n";
+        let err = check_nervi_publish_response(body).expect_err("top-level jsonrpc error must be classified as a failure");
+        assert!(err.contains("Method not found"));
+    }
+
+    #[test]
+    fn falls_back_to_raw_body_when_not_sse_framed() {
+        // Defensive: if nervi-mcp ever returns plain JSON (no SSE framing),
+        // the parser should still work rather than failing to find "data: ".
+        let body = "{\"result\":{\"content\":[],\"isError\":true},\"jsonrpc\":\"2.0\",\"id\":1}";
+        let err = check_nervi_publish_response(body).expect_err("plain JSON isError response must still be classified as a failure");
+        assert!(err.contains("no error text"));
+    }
 }
 
 /// Poll GitHub Actions for the latest *completed*, *push*-triggered run on
