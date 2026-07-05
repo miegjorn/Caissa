@@ -10,9 +10,13 @@
 #     posts the result to Farga as a Signal, then exits.
 #
 # Env vars:
-#   FARGA_MCP_URL       MCP endpoint (interactive mode + task mode MCP config)
-#   DISPATCHER_MCP_URL  Dispatcher MCP endpoint (interactive mode)
-#   FARGA_URL           Farga REST base URL (task mode result posting)
+#   FARGA_MCP_URL             MCP endpoint (interactive mode + task mode MCP config)
+#   DISPATCHER_MCP_URL        Dispatcher MCP endpoint (interactive mode)
+#   FARGA_URL                 Farga REST base URL (task mode result posting)
+#   NERVI_MCP_URL             Nervi MCP endpoint (task mode result publishing, alongside Farga)
+#   ASSIGNMENT_REPLY_SUBJECT  NATS subject to publish the task result to via Nervi (task mode);
+#                             set by the dispatcher for jobs dispatched through invoke_agent.
+#                             Result publishing to Nervi is skipped if unset.
 #   TASK                If set: task mode. The prompt passed to claude --print.
 #   AGENT_CONTEXT       Markdown context written to /workspace/CLAUDE.md (task mode)
 #   SESSION_ID          Farga project to write result Signal under (task mode)
@@ -184,6 +188,52 @@ except Exception as e:
     print('[agent] warning: failed to write result to farga: ' + str(e), file=sys.stderr)
     # Don't fail the job — output already happened
 PYEOF
+
+  # Also publish the result to Nervi on the assignment reply subject the
+  # dispatcher minted for this job (see caissa-cli/src/commands/dispatch.rs
+  # invoke_agent / create_agent_job), so get_agent_result can read it without
+  # polling Farga. No-op unless both NERVI_MCP_URL and ASSIGNMENT_REPLY_SUBJECT
+  # are set — i.e. this only fires for jobs dispatched through the assignment
+  # mechanism; anything else (e.g. manual/legacy invocations) is unaffected.
+  if [ -n "${NERVI_MCP_URL:-}" ] && [ -n "${ASSIGNMENT_REPLY_SUBJECT:-}" ]; then
+    python3 - << PYEOF
+import urllib.request, json, os, sys
+
+nervi_mcp_url = os.environ.get('NERVI_MCP_URL', '')
+assignment_reply_subject = os.environ.get('ASSIGNMENT_REPLY_SUBJECT', '')
+
+output = """${OUTPUT}"""
+
+mcp_body = json.dumps({
+    'jsonrpc': '2.0',
+    'id': 1,
+    'method': 'tools/call',
+    'params': {
+        'name': 'nervi_publish',
+        'arguments': {
+            'subject': assignment_reply_subject,
+            'payload': output
+        }
+    }
+}).encode('utf-8')
+
+req = urllib.request.Request(
+    nervi_mcp_url,
+    data=mcp_body,
+    headers={
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/event-stream'
+    },
+    method='POST'
+)
+try:
+    urllib.request.urlopen(req, timeout=10)
+    print('[agent] result published to nervi subject: ' + assignment_reply_subject)
+except Exception as e:
+    print('[agent] warning: failed to publish result to nervi: ' + str(e), file=sys.stderr)
+    # Don't fail the job — output already happened (and Farga already has it)
+PYEOF
+  fi
 
 else
   # ── Interactive mode ───────────────────────────────────────────────────────

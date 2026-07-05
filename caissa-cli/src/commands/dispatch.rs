@@ -143,6 +143,7 @@ struct DispatchState {
     agents_namespace: String,
     farga_url: String,
     farga_mcp_url: String,
+    nervi_mcp_url: String,
     scope_rules: Arc<ScopeRules>,
     nervi: Arc<nervi_core::NerviClient>,
 }
@@ -337,6 +338,7 @@ async fn call_tool(state: &DispatchState, name: &str, args: &Value) -> anyhow::R
                 &state.agents_namespace,
                 &state.farga_url,
                 &state.farga_mcp_url,
+                &state.nervi_mcp_url,
                 &reply_subject,
             )
             .await?;
@@ -383,6 +385,7 @@ async fn create_agent_job(
     namespace: &str,
     farga_url: &str,
     farga_mcp_url: &str,
+    nervi_mcp_url: &str,
     reply_subject: &str,
 ) -> anyhow::Result<String> {
     let short_id = &uuid::Uuid::new_v4().to_string()[..8];
@@ -400,6 +403,7 @@ async fn create_agent_job(
         env_val("MODEL", model),
         env_val("ASSIGNMENT_REPLY_SUBJECT", reply_subject),
         env_val("NATS_URL", "nats://nervi-nats.occitan-system.svc.cluster.local:4222"),
+        env_val("NERVI_MCP_URL", nervi_mcp_url),
         // ANTHROPIC_API_KEY from the cluster secret (for claude* models)
         EnvVar {
             name: "ANTHROPIC_API_KEY".into(),
@@ -727,6 +731,28 @@ mod tests {
         let subject_env = env.iter().find(|e| e.name == "ASSIGNMENT_REPLY_SUBJECT").expect("must be set");
         assert_eq!(subject_env.value.as_deref(), Some("occitan.assignment.assign-abc123.reply"));
     }
+
+    #[test]
+    fn build_job_env_includes_nervi_mcp_url() {
+        let env = vec![
+            env_val("DOMAIN", "farga"),
+            env_val("ASSIGNMENT_REPLY_SUBJECT", "occitan.assignment.assign-abc123.reply"),
+            env_val("NERVI_MCP_URL", "http://nervi.occitan-system.svc.cluster.local:8080/mcp"),
+        ];
+        let job = build_job(
+            "agent-farga-developer-abc123",
+            "farga",
+            "developer",
+            "session-1",
+            "agents",
+            "ghcr.io/miegjorn/caissa-sandbox:guilhem",
+            env,
+        );
+        let container = &job.spec.unwrap().template.spec.unwrap().containers[0];
+        let env = container.env.as_ref().unwrap();
+        let nervi_env = env.iter().find(|e| e.name == "NERVI_MCP_URL").expect("must be set");
+        assert_eq!(nervi_env.value.as_deref(), Some("http://nervi.occitan-system.svc.cluster.local:8080/mcp"));
+    }
 }
 
 // ── Assignment result read ────────────────────────────────────────────────────
@@ -875,6 +901,8 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         .unwrap_or_else(|_| "http://farga.occitan-system.svc.cluster.local:7500".into());
     let farga_mcp_url = std::env::var("FARGA_MCP_URL")
         .unwrap_or_else(|_| "http://farga.occitan-system.svc.cluster.local:7500/mcp".into());
+    let nervi_mcp_url = std::env::var("NERVI_MCP_URL")
+        .unwrap_or_else(|_| "http://nervi.occitan-system.svc.cluster.local:8080/mcp".into());
     let fondament_url = std::env::var("FONDAMENT_URL")
         .unwrap_or_else(|_| "http://fondament.occitan-system.svc.cluster.local:7800".into());
     let nats_url = std::env::var("NATS_URL")
@@ -900,6 +928,7 @@ pub async fn run(port: u16) -> anyhow::Result<()> {
         agents_namespace,
         farga_url,
         farga_mcp_url,
+        nervi_mcp_url,
         scope_rules,
         nervi: Arc::new(nervi),
     };
