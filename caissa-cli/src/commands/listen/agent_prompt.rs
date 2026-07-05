@@ -307,7 +307,6 @@ pub(crate) async fn agent_allowed_tools(fondament_url: &str, state: &ListenState
         // matrix_send in particular always 403s (charradissa MCP server's
         // backing identity has no standing in #occitan).
         "mcp__charradissa__matrix_get_dm".to_string(),
-        "mcp__charradissa__matrix_request_approval".to_string(),
         "mcp__nervi__nervi_publish".to_string(),
         "mcp__nervi__nervi_subscribe".to_string(),
         "mcp__farga__write_context_node".to_string(),
